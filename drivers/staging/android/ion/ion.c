@@ -40,6 +40,7 @@
 #include <linux/sched/task.h>
 #include <linux/bitops.h>
 #include <linux/msm_dma_iommu_mapping.h>
+#include <trace/events/kmem.h>
 #define CREATE_TRACE_POINTS
 #include <trace/events/ion.h>
 #include <soc/qcom/secure_buffer.h>
@@ -48,6 +49,7 @@
 #include "ion_secure_util.h"
 
 static struct ion_device *internal_dev;
+static atomic_long_t total_heap_bytes;
 
 int ion_walk_heaps(int heap_id, enum ion_heap_type type, void *data,
 		   int (*f)(struct ion_heap *heap, void *data))
@@ -171,7 +173,11 @@ static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 	mutex_lock(&dev->buffer_lock);
 	ion_buffer_add(dev, buffer);
 	mutex_unlock(&dev->buffer_lock);
+	trace_ion_buffer_create(buffer->sg_table, buffer->size);
+	trace_ion_heap_grow(heap->name, len,
+			    atomic_long_read(&heap->total_allocated));
 	atomic_long_add(len, &heap->total_allocated);
+	atomic_long_add(len, &total_heap_bytes);
 	return buffer;
 
 err1:
@@ -187,6 +193,10 @@ void ion_buffer_destroy(struct ion_buffer *buffer)
 		pr_warn_ratelimited("ION client likely missing a call to dma_buf_kunmap or dma_buf_vunmap\n");
 		buffer->heap->ops->unmap_kernel(buffer->heap, buffer);
 	}
+
+	trace_ion_buffer_destroy(buffer->sg_table, buffer->size);
+	trace_ion_heap_shrink(buffer->heap->name,  buffer->size,
+			      atomic_long_read(&buffer->heap->total_allocated));
 	buffer->heap->ops->free(buffer);
 	kfree(buffer);
 }
@@ -201,6 +211,7 @@ static void _ion_buffer_destroy(struct ion_buffer *buffer)
 	mutex_lock(&dev->buffer_lock);
 	rb_erase(&buffer->node, &dev->buffers);
 	mutex_unlock(&dev->buffer_lock);
+	atomic_long_sub(buffer->size, &total_heap_bytes);
 
 	atomic_long_sub(buffer->size, &buffer->heap->total_allocated);
 	if (heap->flags & ION_HEAP_FLAG_DEFER_FREE)
@@ -1287,6 +1298,56 @@ void ion_device_add_heap(struct ion_device *dev, struct ion_heap *heap)
 }
 EXPORT_SYMBOL(ion_device_add_heap);
 
+static ssize_t
+total_heaps_kb_show(struct kobject *kobj, struct kobj_attribute *attr,
+		    char *buf)
+{
+	u64 size_in_bytes = atomic_long_read(&total_heap_bytes);
+
+	return sprintf(buf, "%llu\n", div_u64(size_in_bytes, 1024));
+}
+
+static ssize_t
+total_pools_kb_show(struct kobject *kobj, struct kobj_attribute *attr,
+		    char *buf)
+{
+	u64 size_in_bytes = ion_page_pool_nr_pages() * PAGE_SIZE;
+
+	return sprintf(buf, "%llu\n", div_u64(size_in_bytes, 1024));
+}
+
+static struct kobj_attribute total_heaps_kb_attr =
+	__ATTR_RO(total_heaps_kb);
+
+static struct kobj_attribute total_pools_kb_attr =
+	__ATTR_RO(total_pools_kb);
+
+static struct attribute *ion_device_attrs[] = {
+	&total_heaps_kb_attr.attr,
+	&total_pools_kb_attr.attr,
+	NULL,
+};
+
+ATTRIBUTE_GROUPS(ion_device);
+
+static int ion_init_sysfs(void)
+{
+	struct kobject *ion_kobj;
+	int ret;
+
+	ion_kobj = kobject_create_and_add("ion", kernel_kobj);
+	if (!ion_kobj)
+		return -ENOMEM;
+
+	ret = sysfs_create_groups(ion_kobj, ion_device_groups);
+	if (ret) {
+		kobject_put(ion_kobj);
+		return ret;
+	}
+
+	return 0;
+}
+
 struct ion_device *ion_device_create(void)
 {
 	struct ion_device *idev;
@@ -1303,8 +1364,13 @@ struct ion_device *ion_device_create(void)
 	ret = misc_register(&idev->dev);
 	if (ret) {
 		pr_err("ion: failed to register misc device.\n");
-		kfree(idev);
-		return ERR_PTR(ret);
+		goto err_reg;
+	}
+
+	ret = ion_init_sysfs();
+	if (ret) {
+		pr_err("ion: failed to add sysfs attributes.\n");
+		goto err_sysfs;
 	}
 
 	idev->debug_root = debugfs_create_dir("ion", NULL);
@@ -1321,5 +1387,11 @@ debugfs_done:
 	plist_head_init(&idev->heaps);
 	internal_dev = idev;
 	return idev;
+
+err_sysfs:
+	misc_deregister(&idev->dev);
+err_reg:
+	kfree(idev);
+	return ERR_PTR(ret);
 }
 EXPORT_SYMBOL(ion_device_create);
