@@ -599,7 +599,7 @@
 			reg = <0x0 0x9f800000 0x0 0x1e00000>;
 		};
 
-		ramoops: ramoops_region@0xa1600000 {
+		ramoops_region: ramoops_region@0xa1600000 {
 			compatible = "ramoops";
 			reg = <0 0xa1600000 0 0x400000>;
 			console-size = <0x200000>;
