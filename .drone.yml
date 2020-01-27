@@ -1,0 +1,15 @@
+kind: pipeline
+name: Balaji's meme generator
+
+clone:
+  depth: 1
+
+steps:
+- name: MoreMemes
+  image: raphielscape/spinsinfra:fedora
+  environment:
+    token:
+      from_secret: token
+  commands:
+    - curl -sLo kernel.sh https://github.com/Dyneteve/myscripts/raw/master/kernel.sh
+    - bash kernel.sh violet clean NOPUSH
