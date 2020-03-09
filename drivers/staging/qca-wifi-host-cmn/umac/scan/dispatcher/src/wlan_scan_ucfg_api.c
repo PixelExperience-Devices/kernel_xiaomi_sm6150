@@ -476,11 +476,6 @@ ucfg_scan_update_dbs_scan_ctrl_ext_flag(struct scan_start_request *req)
 		goto end;
 	}
 
-	if (!ucfg_scan_cfg_honour_nl_scan_policy_flags(psoc)) {
-		scm_debug("nl scan policy flags not honoured, goto end");
-		goto end;
-	}
-
 	if (req->scan_req.scan_policy_high_accuracy) {
 		scm_debug("high accuracy scan received, going for non-dbs scan");
 		scan_dbs_policy = SCAN_DBS_POLICY_FORCE_NONDBS;
@@ -776,46 +771,6 @@ static void ucfg_scan_req_update_concurrency_params(
 	}
 }
 
-/**
- * scm_scan_chlist_concurrency_modify() - modify chan list to skip 5G if
- *    required
- * @vdev: vdev object
- * @req: scan request
- *
- * Check and skip 5G chan list based on DFS AP present and current hw mode.
- *
- * Return: void
- */
-static inline void scm_scan_chlist_concurrency_modify(
-	struct wlan_objmgr_vdev *vdev, struct scan_start_request *req)
-{
-	struct wlan_objmgr_psoc *psoc;
-	uint32_t i;
-	uint32_t num_scan_channels;
-
-	psoc = wlan_vdev_get_psoc(vdev);
-	if (!psoc)
-		return;
-	/* do this only for STA and P2P-CLI mode */
-	if (!(wlan_vdev_mlme_get_opmode(req->vdev) == QDF_STA_MODE) &&
-	    !(wlan_vdev_mlme_get_opmode(req->vdev) == QDF_P2P_CLIENT_MODE))
-		return;
-	if (!policy_mgr_scan_trim_5g_chnls_for_dfs_ap(psoc))
-		return;
-	num_scan_channels = 0;
-	for (i = 0; i < req->scan_req.chan_list.num_chan; i++) {
-		if (WLAN_REG_IS_5GHZ_CH_FREQ(
-			req->scan_req.chan_list.chan[i].freq)) {
-			continue;
-		}
-		req->scan_req.chan_list.chan[num_scan_channels++] =
-			req->scan_req.chan_list.chan[i];
-	}
-	if (num_scan_channels < req->scan_req.chan_list.num_chan)
-		scm_debug("5g chan skipped (%d, %d)",
-			  req->scan_req.chan_list.num_chan, num_scan_channels);
-	req->scan_req.chan_list.num_chan = num_scan_channels;
-}
 #else
 static inline void ucfg_scan_req_update_concurrency_params(
 	struct wlan_objmgr_vdev *vdev, struct scan_start_request *req,
@@ -828,10 +783,6 @@ ucfg_update_passive_dwell_time(struct wlan_objmgr_vdev *vdev,
 static inline void
 ucfg_scan_update_dbs_scan_ctrl_ext_flag(
 	struct scan_start_request *req) {}
-static inline void scm_scan_chlist_concurrency_modify(
-	struct wlan_objmgr_vdev *vdev, struct scan_start_request *req)
-{
-}
 #endif
 
 QDF_STATUS
@@ -889,10 +840,11 @@ ucfg_update_channel_list(struct scan_start_request *req,
 	if (req->scan_req.p2p_scan_type == SCAN_P2P_SEARCH)
 		p2p_search = true;
 	/*
-	 * No need to update channels if req is single channel* ie ROC,
-	 * Preauth or a single channel scan etc.
+	 * No need to update channels if req is passive scan and single channel
+	 * ie ROC, Preauth etc
 	 */
-	if (req->scan_req.chan_list.num_chan == 1)
+	if (req->scan_req.scan_f_passive &&
+	    req->scan_req.chan_list.num_chan == 1)
 		return;
 
 	/* do this only for STA and P2P-CLI mode */
@@ -908,20 +860,14 @@ ucfg_update_channel_list(struct scan_start_request *req,
 		return;
 
 	for (i = 0; i < req->scan_req.chan_list.num_chan; i++) {
-		uint32_t freq;
-		uint32_t chan;
-
-		freq = req->scan_req.chan_list.chan[i].freq;
-		chan = wlan_reg_freq_to_chan(pdev, freq);
-
-		if (wlan_reg_chan_has_dfs_attribute(pdev, chan))
+		if (wlan_reg_is_dfs_ch(pdev, wlan_reg_freq_to_chan(pdev,
+							req->scan_req.chan_list.
+							chan[i].freq)))
 			continue;
-
 		req->scan_req.chan_list.chan[num_scan_channels++] =
 				req->scan_req.chan_list.chan[i];
 	}
 	req->scan_req.chan_list.num_chan = num_scan_channels;
-	scm_scan_chlist_concurrency_modify(req->vdev, req);
 }
 
 /**
@@ -1046,7 +992,8 @@ ucfg_scan_req_update_params(struct wlan_objmgr_vdev *vdev,
 	if (custom_chan_list->num_chan)
 		qdf_mem_copy(&req->scan_req.chan_list, custom_chan_list,
 				sizeof(struct chan_list));
-	else if (!req->scan_req.chan_list.num_chan)
+	else if (req->scan_req.scan_f_wide_band &&
+			!req->scan_req.chan_list.num_chan)
 		ucfg_scan_init_chanlist_params(req, 0, NULL, NULL);
 
 	ucfg_update_channel_list(req, scan_obj);
@@ -1196,8 +1143,6 @@ ucfg_scan_set_wide_band_scan(struct wlan_objmgr_pdev *pdev, bool enable)
 	}
 	pdev_id = wlan_objmgr_pdev_get_pdev_id(pdev);
 	scan_obj = wlan_pdev_get_scan_obj(pdev);
-	if (!scan_obj)
-		return QDF_STATUS_E_FAILURE;
 
 	scm_debug("set wide_band_scan to %d", enable);
 	scan_obj->pdev_info[pdev_id].wide_band_scan = enable;
@@ -1216,8 +1161,6 @@ bool ucfg_scan_get_wide_band_scan(struct wlan_objmgr_pdev *pdev)
 	}
 	pdev_id = wlan_objmgr_pdev_get_pdev_id(pdev);
 	scan_obj = wlan_pdev_get_scan_obj(pdev);
-	if (!scan_obj)
-		return QDF_STATUS_E_FAILURE;
 
 	return scan_obj->pdev_info[pdev_id].wide_band_scan;
 }
@@ -1494,10 +1437,6 @@ ucfg_scan_register_event_handler(struct wlan_objmgr_pdev *pdev,
 
 	scan = wlan_pdev_get_scan_obj(pdev);
 	pdev_ev_handler = wlan_pdev_get_pdev_scan_ev_handlers(pdev);
-	if (!pdev_ev_handler) {
-		scm_err("null pdev_ev_handler");
-		return QDF_STATUS_E_NULL_VALUE;
-	}
 	cb_handler = &(pdev_ev_handler->cb_handlers[0]);
 
 	qdf_spin_lock_bh(&scan->lock);
@@ -1550,7 +1489,6 @@ wlan_scan_global_init(struct wlan_scan_obj *scan_obj)
 	scan_obj->scan_def.conc_passive_dwell = SCAN_CONC_PASSIVE_DWELL_TIME;
 	scan_obj->scan_def.conc_max_rest_time = SCAN_CONC_MAX_REST_TIME;
 	scan_obj->scan_def.conc_min_rest_time = SCAN_CONC_MIN_REST_TIME;
-	scan_obj->scan_def.honour_nl_scan_policy_flags = true;
 	scan_obj->scan_def.conc_idle_time = SCAN_CONC_IDLE_TIME;
 	scan_obj->scan_def.repeat_probe_time = SCAN_REPEAT_PROBE_TIME;
 	scan_obj->scan_def.probe_spacing_time = SCAN_PROBE_SPACING_TIME;
@@ -1633,9 +1571,6 @@ ucfg_scan_unregister_event_handler(struct wlan_objmgr_pdev *pdev,
 	}
 	scan = wlan_pdev_get_scan_obj(pdev);
 	pdev_ev_handler = wlan_pdev_get_pdev_scan_ev_handlers(pdev);
-	if (!pdev_ev_handler)
-		return;
-
 	cb_handler = &(pdev_ev_handler->cb_handlers[0]);
 
 	qdf_spin_lock_bh(&scan->lock);
@@ -1814,10 +1749,8 @@ is_chan_enabled_for_scan(struct regulatory_channel *reg_chan,
 			((reg_chan->center_freq < low_2g) ||
 			(reg_chan->center_freq > high_2g)))
 		return false;
-	else if ((util_scan_scm_chan_to_band(reg_chan->chan_num) ==
-				WLAN_BAND_5_GHZ) &&
-		 ((reg_chan->center_freq < low_5g) ||
-		  (reg_chan->center_freq > high_5g)))
+	else if ((reg_chan->center_freq < low_5g) ||
+			(reg_chan->center_freq > high_5g))
 		return false;
 
 	return true;
@@ -1851,7 +1784,7 @@ ucfg_scan_init_chanlist_params(struct scan_start_request *req,
 	 * provided in scan request causing scan to take
 	 * too much time to complete.
 	 */
-	if (pdev && !num_chans) {
+	if (pdev && !num_chans && ucfg_scan_get_wide_band_scan(pdev)) {
 		reg_chan_list = qdf_mem_malloc_atomic(NUM_CHANNELS *
 				sizeof(struct regulatory_channel));
 		if (!reg_chan_list) {
@@ -1935,9 +1868,6 @@ ucfg_scan_init_chanlist_params(struct scan_start_request *req,
 end:
 	if (scan_freqs)
 		qdf_mem_free(scan_freqs);
-
-	if (reg_chan_list)
-		qdf_mem_free(reg_chan_list);
 
 	return QDF_STATUS_SUCCESS;
 }
@@ -2074,8 +2004,6 @@ QDF_STATUS ucfg_scan_update_user_config(struct wlan_objmgr_psoc *psoc,
 	scan_def->adaptive_dwell_time_mode = scan_cfg->scan_dwell_time_mode;
 	scan_def->adaptive_dwell_time_mode_nc =
 				scan_cfg->scan_dwell_time_mode_nc;
-	scan_def->honour_nl_scan_policy_flags =
-				scan_cfg->honour_nl_scan_policy_flags;
 	scan_def->scan_f_chan_stat_evnt = scan_cfg->is_snr_monitoring_enabled;
 	scan_obj->ie_whitelist = scan_cfg->ie_whitelist;
 	scan_def->repeat_probe_time = scan_cfg->usr_cfg_probe_rpt_time;
@@ -2444,17 +2372,6 @@ void ucfg_scan_clear_vdev_del_in_progress(struct wlan_objmgr_vdev *vdev)
 		return;
 	}
 	scan_vdev_obj->is_vdev_delete_in_progress = false;
-}
-
-bool ucfg_scan_cfg_honour_nl_scan_policy_flags(struct wlan_objmgr_psoc *psoc)
-{
-	struct wlan_scan_obj *scan_obj;
-
-	scan_obj = wlan_psoc_get_scan_obj(psoc);
-	if (!scan_obj)
-		return false;
-
-	return scan_obj->scan_def.honour_nl_scan_policy_flags;
 }
 
 bool ucfg_scan_wake_lock_in_user_scan(struct wlan_objmgr_psoc *psoc)

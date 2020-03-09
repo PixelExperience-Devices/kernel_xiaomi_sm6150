@@ -381,21 +381,30 @@ static inline void wlan_hdd_sched_scan_update_relative_rssi(
 }
 #endif
 
-int wlan_cfg80211_sched_scan_start(struct wlan_objmgr_vdev *vdev,
-				   struct cfg80211_sched_scan_request *request,
-				   uint8_t scan_backoff_multiplier)
+int wlan_cfg80211_sched_scan_start(struct wlan_objmgr_pdev *pdev,
+	struct net_device *dev,
+	struct cfg80211_sched_scan_request *request,
+	uint8_t scan_backoff_multiplier)
 {
 	struct pno_scan_req_params *req;
 	int i, j, ret = 0;
 	QDF_STATUS status;
 	uint8_t num_chan = 0, channel;
-	struct wlan_objmgr_pdev *pdev = wlan_vdev_get_pdev(vdev);
+	struct wlan_objmgr_vdev *vdev;
 	struct wlan_objmgr_psoc *psoc;
 	uint32_t valid_ch[SCAN_PNO_MAX_NETW_CHANNELS_EX] = {0};
 	bool enable_dfs_pno_chnl_scan;
 
+	vdev = wlan_objmgr_get_vdev_by_macaddr_from_pdev(pdev, dev->dev_addr,
+		WLAN_OSIF_ID);
+	if (!vdev) {
+		cfg80211_err("vdev object is NULL");
+		return -EIO;
+	}
+
 	if (ucfg_scan_get_pno_in_progress(vdev)) {
 		cfg80211_debug("pno is already in progress");
+		wlan_objmgr_vdev_release_ref(vdev, WLAN_OSIF_ID);
 		return -EBUSY;
 	}
 
@@ -406,6 +415,7 @@ int wlan_cfg80211_sched_scan_start(struct wlan_objmgr_vdev *vdev,
 				INVAL_VDEV_ID, INVAL_SCAN_ID, true);
 		if (QDF_IS_STATUS_ERROR(status)) {
 			cfg80211_err("aborting the existing scan is unsuccessful");
+			wlan_objmgr_vdev_release_ref(vdev, WLAN_OSIF_ID);
 			return -EBUSY;
 		}
 	}
@@ -413,6 +423,7 @@ int wlan_cfg80211_sched_scan_start(struct wlan_objmgr_vdev *vdev,
 	req = qdf_mem_malloc(sizeof(*req));
 	if (!req) {
 		cfg80211_err("req malloc failed");
+		wlan_objmgr_vdev_release_ref(vdev, WLAN_OSIF_ID);
 		return -ENOMEM;
 	}
 
@@ -440,14 +451,10 @@ int wlan_cfg80211_sched_scan_start(struct wlan_objmgr_vdev *vdev,
 
 	enable_dfs_pno_chnl_scan = ucfg_scan_is_dfs_chnl_scan_enabled(psoc);
 	if (request->n_channels) {
-		char *chl = qdf_mem_malloc((request->n_channels * 5) + 1);
+		char chl[(request->n_channels * 5) + 1];
 		int len = 0;
 		bool ap_or_go_present = wlan_cfg80211_is_ap_go_present(psoc);
 
-		if (!chl) {
-			ret = -ENOMEM;
-			goto error;
-		}
 		for (i = 0; i < request->n_channels; i++) {
 			channel = request->channels[i]->hw_value;
 			if (wlan_reg_is_dsrc_chan(pdev, channel))
@@ -469,8 +476,6 @@ int wlan_cfg80211_sched_scan_start(struct wlan_objmgr_vdev *vdev,
 				if (QDF_IS_STATUS_ERROR(status)) {
 					cfg80211_err("DNBS check failed");
 					qdf_mem_free(req);
-					qdf_mem_free(chl);
-					chl = NULL;
 					ret = -EINVAL;
 					goto error;
 				}
@@ -482,8 +487,6 @@ int wlan_cfg80211_sched_scan_start(struct wlan_objmgr_vdev *vdev,
 		}
 		cfg80211_notice("No. of Scan Channels: %d", num_chan);
 		cfg80211_notice("Channel-List: %s", chl);
-		qdf_mem_free(chl);
-		chl = NULL;
 		/* If all channels are DFS and dropped,
 		 * then ignore the PNO request
 		 */
@@ -595,13 +598,30 @@ int wlan_cfg80211_sched_scan_start(struct wlan_objmgr_vdev *vdev,
 	cfg80211_info("PNO scan request offloaded");
 
 error:
+	wlan_objmgr_vdev_release_ref(vdev, WLAN_OSIF_ID);
 	qdf_mem_free(req);
 	return ret;
 }
 
-int wlan_cfg80211_sched_scan_stop(struct wlan_objmgr_vdev *vdev)
+int wlan_cfg80211_sched_scan_stop(struct wlan_objmgr_pdev *pdev,
+	struct net_device *dev)
 {
 	QDF_STATUS status;
+	struct wlan_objmgr_vdev *vdev;
+
+	vdev = wlan_objmgr_get_vdev_by_macaddr_from_pdev(pdev, dev->dev_addr,
+		WLAN_OSIF_ID);
+	if (!vdev) {
+	/*
+	 * cfg80211 expects sched_scan_stop command to always succeed.
+	 * There can be recovery or any other error in the driver between the
+	 * sched_scan_start and sched_scan_stop commands. If driver does
+	 * not return success in this case there is a possibility of further
+	 * sched_scan_start request might not be received again.
+	 */
+		cfg80211_err("vdev object is NULL");
+		return 0;
+	}
 
 	status = ucfg_scan_pno_stop(vdev);
 	if (QDF_IS_STATUS_ERROR(status))
@@ -609,6 +629,7 @@ int wlan_cfg80211_sched_scan_stop(struct wlan_objmgr_vdev *vdev)
 	else
 		cfg80211_info("PNO scan disabled");
 
+	wlan_objmgr_vdev_release_ref(vdev, WLAN_OSIF_ID);
 	return 0;
 }
 #endif /*FEATURE_WLAN_SCAN_PNO */
@@ -1271,17 +1292,18 @@ wlan_cfg80211_allow_simultaneous_scan(struct wlan_objmgr_psoc *psoc)
 }
 #endif
 
-int wlan_cfg80211_scan(struct wlan_objmgr_vdev *vdev,
-		       struct cfg80211_scan_request *request,
-		       struct scan_params *params)
+int wlan_cfg80211_scan(struct wlan_objmgr_pdev *pdev,
+		struct cfg80211_scan_request *request,
+		struct scan_params *params)
 {
+	struct net_device *dev = request->wdev->netdev;
 	struct scan_start_request *req;
 	struct wlan_ssid *pssid;
 	uint8_t i;
 	int ret = 0;
 	uint8_t num_chan = 0, channel;
 	uint32_t c_freq;
-	struct wlan_objmgr_pdev *pdev = wlan_vdev_get_pdev(vdev);
+	struct wlan_objmgr_vdev *vdev;
 	wlan_scan_requester req_id;
 	struct pdev_osif_priv *osif_priv;
 	struct wlan_objmgr_psoc *psoc;
@@ -1291,14 +1313,23 @@ int wlan_cfg80211_scan(struct wlan_objmgr_vdev *vdev,
 	struct net_device *netdev = NULL;
 	QDF_STATUS qdf_status;
 
+	/* Get the vdev object */
+	vdev = wlan_objmgr_get_vdev_by_macaddr_from_pdev(pdev, dev->dev_addr,
+		WLAN_OSIF_ID);
+	if (vdev == NULL) {
+		cfg80211_err("vdev object is NULL");
+		return -EIO;
+	}
 	psoc = wlan_pdev_get_psoc(pdev);
 	if (!psoc) {
+		wlan_objmgr_vdev_release_ref(vdev, WLAN_OSIF_ID);
 		cfg80211_err("Invalid psoc object");
 		return -EINVAL;
 	}
 	/* Get NL global context from objmgr*/
 	osif_priv = wlan_pdev_get_ospriv(pdev);
 	if (!osif_priv) {
+		wlan_objmgr_vdev_release_ref(vdev, WLAN_OSIF_ID);
 		cfg80211_err("Invalid osif priv object");
 		return -EINVAL;
 	}
@@ -1310,11 +1341,13 @@ int wlan_cfg80211_scan(struct wlan_objmgr_vdev *vdev,
 	if (!wlan_cfg80211_allow_simultaneous_scan(psoc) &&
 	    !qdf_list_empty(&osif_priv->osif_scan->scan_req_q) &&
 	    wlan_vdev_mlme_get_opmode(vdev) != QDF_SAP_MODE) {
+		wlan_objmgr_vdev_release_ref(vdev, WLAN_OSIF_ID);
 		cfg80211_err("Simultaneous scan disabled, reject scan");
 		return -EBUSY;
 	}
 	req = qdf_mem_malloc(sizeof(*req));
 	if (!req) {
+		wlan_objmgr_vdev_release_ref(vdev, WLAN_OSIF_ID);
 		cfg80211_err("Failed to allocate scan request memory");
 		return -EINVAL;
 	}
@@ -1324,6 +1357,7 @@ int wlan_cfg80211_scan(struct wlan_objmgr_vdev *vdev,
 	req_id = osif_priv->osif_scan->req_id;
 	scan_id = ucfg_scan_get_scan_id(psoc);
 	if (!scan_id) {
+		wlan_objmgr_vdev_release_ref(vdev, WLAN_OSIF_ID);
 		cfg80211_err("Invalid scan id");
 		qdf_mem_free(req);
 		return -EINVAL;
@@ -1388,15 +1422,13 @@ int wlan_cfg80211_scan(struct wlan_objmgr_vdev *vdev,
 		req->scan_req.p2p_scan_type = SCAN_P2P_SEARCH;
 
 	/* Set dwell time mode according to scan policy type flags */
-	if (ucfg_scan_cfg_honour_nl_scan_policy_flags(psoc)) {
-		if (req->scan_req.scan_policy_high_accuracy)
-			req->scan_req.adaptive_dwell_time_mode =
-						SCAN_DWELL_MODE_STATIC;
-		if (req->scan_req.scan_policy_low_power ||
-		    req->scan_req.scan_policy_low_span)
-			req->scan_req.adaptive_dwell_time_mode =
-						SCAN_DWELL_MODE_AGGRESSIVE;
-	}
+	if (req->scan_req.scan_policy_high_accuracy)
+		req->scan_req.adaptive_dwell_time_mode =
+					SCAN_DWELL_MODE_STATIC;
+	if ((req->scan_req.scan_policy_low_power) ||
+	   (req->scan_req.scan_policy_low_span))
+		req->scan_req.adaptive_dwell_time_mode =
+					SCAN_DWELL_MODE_AGGRESSIVE;
 
 	/*
 	 * FW require at least 1 MAC to send probe request.
@@ -1409,7 +1441,7 @@ int wlan_cfg80211_scan(struct wlan_objmgr_vdev *vdev,
 		qdf_set_macaddr_broadcast(&req->scan_req.bssid_list[0]);
 
 	if (request->n_channels) {
-		char *chl = qdf_mem_malloc((request->n_channels * 5) + 1);
+		char chl[(request->n_channels * 5) + 1];
 		int len = 0;
 #ifdef WLAN_POLICY_MGR_ENABLE
 		bool ap_or_go_present =
@@ -1418,10 +1450,7 @@ int wlan_cfg80211_scan(struct wlan_objmgr_vdev *vdev,
 			     policy_mgr_mode_specific_connection_count(
 			     psoc, PM_P2P_GO_MODE, NULL);
 #endif
-		if (!chl) {
-			ret = -ENOMEM;
-			goto end;
-		}
+
 		for (i = 0; i < request->n_channels; i++) {
 			channel = request->channels[i]->hw_value;
 			c_freq = wlan_reg_chan_to_freq(pdev, channel);
@@ -1439,8 +1468,6 @@ int wlan_cfg80211_scan(struct wlan_objmgr_vdev *vdev,
 				if (QDF_IS_STATUS_ERROR(qdf_status)) {
 					cfg80211_err("DNBS check failed");
 					qdf_mem_free(req);
-					qdf_mem_free(chl);
-					chl = NULL;
 					ret = -EINVAL;
 					goto end;
 				}
@@ -1462,8 +1489,6 @@ int wlan_cfg80211_scan(struct wlan_objmgr_vdev *vdev,
 				break;
 		}
 		cfg80211_info("Channel-List: %s", chl);
-		qdf_mem_free(chl);
-		chl = NULL;
 		cfg80211_info("No. of Scan Channels: %d", num_chan);
 	}
 	if (!num_chan) {
@@ -1548,6 +1573,7 @@ int wlan_cfg80211_scan(struct wlan_objmgr_vdev *vdev,
 	ret = qdf_status_to_os_return(qdf_status);
 
 end:
+	wlan_objmgr_vdev_release_ref(vdev, WLAN_OSIF_ID);
 	return ret;
 }
 
@@ -1956,47 +1982,10 @@ struct cfg80211_bss *wlan_cfg80211_get_bss(struct wiphy *wiphy,
 }
 #endif
 
-void __wlan_cfg80211_unlink_bss_list(struct wiphy *wiphy, uint8_t *bssid,
-				     uint8_t *ssid, uint8_t ssid_len)
-{
-	struct cfg80211_bss *bss = NULL;
-
-	bss = wlan_cfg80211_get_bss(wiphy, NULL, bssid,
-				    ssid, ssid_len);
-	if (!bss) {
-		cfg80211_info("BSS %pM not found", bssid);
-	} else {
-		cfg80211_debug("unlink entry for ssid:%.*s and BSSID %pM",
-			   ssid_len, ssid, bssid);
-		cfg80211_unlink_bss(wiphy, bss);
-		wlan_cfg80211_put_bss(wiphy, bss);
-	}
-
-	/*
-	 * Kernel creates separate entries into it's bss list for probe resp
-	 * and beacon for hidden AP. Both have separate ref count and thus
-	 * deleting one will not delete other entry.
-	 * If beacon entry of the hidden AP is not deleted and AP switch to
-	 * broadcasting SSID from Hiding SSID, kernel will reject the beacon
-	 * entry. So unlink the hidden beacon entry (if present) as well from
-	 * kernel, to avoid such issue.
-	 */
-	bss = wlan_cfg80211_get_bss(wiphy, NULL, bssid, NULL, 0);
-	if (!bss) {
-		cfg80211_debug("Hidden bss not found for Ssid:%.*s BSSID: %pM sid_len %d",
-			   ssid_len, ssid, bssid, ssid_len);
-	} else {
-		cfg80211_debug("unlink entry for Hidden ssid:%.*s and BSSID %pM",
-			   ssid_len, ssid, bssid);
-
-		cfg80211_unlink_bss(wiphy, bss);
-		/* cfg80211_get_bss get bss with ref count so release it */
-		wlan_cfg80211_put_bss(wiphy, bss);
-	}
-}
 void wlan_cfg80211_unlink_bss_list(struct wlan_objmgr_pdev *pdev,
 				   struct scan_cache_entry *scan_entry)
 {
+	struct cfg80211_bss *bss = NULL;
 	struct pdev_osif_priv *pdev_ospriv = wlan_pdev_get_ospriv(pdev);
 	struct wiphy *wiphy;
 
@@ -2006,8 +1995,15 @@ void wlan_cfg80211_unlink_bss_list(struct wlan_objmgr_pdev *pdev,
 	}
 
 	wiphy = pdev_ospriv->wiphy;
-
-	__wlan_cfg80211_unlink_bss_list(wiphy, scan_entry->bssid.bytes,
-					scan_entry->ssid.ssid,
-					scan_entry->ssid.length);
+	bss = wlan_cfg80211_get_bss(wiphy, NULL, scan_entry->bssid.bytes,
+				    scan_entry->ssid.ssid,
+				    scan_entry->ssid.length);
+	if (!bss) {
+		cfg80211_err("BSS %pM not found", scan_entry->bssid.bytes);
+	} else {
+		cfg80211_debug("cfg80211_unlink_bss called for BSSID %pM",
+			       scan_entry->bssid.bytes);
+		cfg80211_unlink_bss(wiphy, bss);
+		wlan_cfg80211_put_bss(wiphy, bss);
+	}
 }

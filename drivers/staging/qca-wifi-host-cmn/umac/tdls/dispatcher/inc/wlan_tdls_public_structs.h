@@ -437,7 +437,6 @@ enum tdls_feature_bit {
  * @tdls_pre_off_chan_num: tdls off channel number
  * @tdls_pre_off_chan_bw: tdls off channel bandwidth
  * @tdls_peer_kickout_threshold: sta kickout threshold for tdls peer
- * @tdls_discovery_wake_timeout: Discovery wake timeout
  * @delayed_trig_framint: delayed trigger frame interval
  * @tdls_vdev_nss_2g: tdls NSS setting for 2G band
  * @tdls_vdev_nss_5g: tdls NSS setting for 5G band
@@ -460,7 +459,6 @@ struct tdls_user_config {
 	uint32_t tdls_pre_off_chan_num;
 	uint32_t tdls_pre_off_chan_bw;
 	uint32_t tdls_peer_kickout_threshold;
-	uint32_t tdls_discovery_wake_timeout;
 	uint32_t delayed_trig_framint;
 	uint8_t tdls_vdev_nss_2g;
 	uint8_t tdls_vdev_nss_5g;
@@ -587,27 +585,6 @@ typedef void (*tdls_offchan_parms_callback)(struct wlan_objmgr_vdev *vdev);
 typedef void (*tdls_delete_all_peers_callback)(struct wlan_objmgr_vdev *vdev);
 
 /**
- * tdls_vdev_init_cb() - Callback for initializing the tdls private structure
- * @vdev: vdev object
- *
- * This callback will be used to create the vdev private object and store
- * in os_priv.
- *
- * Return: QDF_STATUS
- */
-typedef QDF_STATUS (*tdls_vdev_init_cb)(struct wlan_objmgr_vdev *vdev);
-
-/**
- * tdls_vdev_deinit_cb() - Callback for deinitializing the tdls private struct
- * @vdev: vdev object
- *
- * This callback will be used to destroy the vdev private object.
- *
- * Return: None
- */
-typedef void (*tdls_vdev_deinit_cb)(struct wlan_objmgr_vdev *vdev);
-
-/**
  * struct tdls_start_params - tdls start params
  * @config: tdls user config
  * @tdls_send_mgmt_req: pass eWNI_SME_TDLS_SEND_MGMT_REQ value
@@ -622,8 +599,6 @@ typedef void (*tdls_vdev_deinit_cb)(struct wlan_objmgr_vdev *vdev);
  * @tdls_reg_peer: register tdls peer with datapath
  * @tdls_dereg_peer: deregister tdls peer from datapath
  * @tdls_dp_vdev_update: update vdev flags in datapath
- * @tdls_osif_init_cb: callback to initialize the tdls priv
- * @tdls_osif_deinit_cb: callback to deinitialize the tdls priv
  */
 struct tdls_start_params {
 	struct tdls_user_config config;
@@ -643,8 +618,6 @@ struct tdls_start_params {
 	tdls_register_peer_callback tdls_reg_peer;
 	tdls_deregister_peer_callback tdls_dereg_peer;
 	tdls_dp_vdev_update_flags_callback tdls_dp_vdev_update;
-	tdls_vdev_init_cb tdls_osif_init_cb;
-	tdls_vdev_deinit_cb tdls_osif_deinit_cb;
 };
 
 /**
@@ -799,7 +772,6 @@ struct tdls_oper_config_force_peer_request {
  * @teardown_notification_ms: tdls teardown notification interval
  * @tdls_peer_kickout_threshold: tdls packets threshold
  *    for peer kickout operation
- * @tdls_discovery_wake_timeout: Discovery wake timeout
  */
 struct tdls_info {
 	uint32_t vdev_id;
@@ -817,7 +789,6 @@ struct tdls_info {
 	uint32_t puapsd_rx_frame_threshold;
 	uint32_t teardown_notification_ms;
 	uint32_t tdls_peer_kickout_threshold;
-	uint32_t tdls_discovery_wake_timeout;
 };
 
 /**
