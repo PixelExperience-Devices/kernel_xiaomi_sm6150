@@ -44,7 +44,6 @@
 #include "wlan_objmgr_psoc_obj.h"
 #include <cdp_txrx_handle.h>
 #include <wlan_policy_mgr_api.h>
-#include "wmi_unified_param.h"
 
 /* Platform specific configuration for max. no. of fragments */
 #define QCA_OL_11AC_TX_MAX_FRAGS            2
@@ -282,8 +281,6 @@ enum ds_mode {
 #define WMA_DEAUTH_RECV_WAKE_LOCK_DURATION      WAKELOCK_DURATION_RECOMMENDED
 #define WMA_DISASSOC_RECV_WAKE_LOCK_DURATION    WAKELOCK_DURATION_RECOMMENDED
 #define WMA_ROAM_HO_WAKE_LOCK_DURATION          (500)          /* in msec */
-#define WMA_ROAM_PREAUTH_WAKE_LOCK_DURATION     (2 * 1000)
-
 #ifdef FEATURE_WLAN_AUTO_SHUTDOWN
 #define WMA_AUTO_SHUTDOWN_WAKE_LOCK_DURATION    WAKELOCK_DURATION_RECOMMENDED
 #endif
@@ -819,7 +816,6 @@ struct roam_synch_frame_ind {
  * @staKeyParams: sta key parameters
  * @ps_enabled: is powersave enable/disable
  * @peer_count: peer count
- * @peer_lock: peer lock
  * @roam_synch_in_progress: flag is in progress or not
  * @plink_status_req: link status request
  * @psnr_req: snr request
@@ -838,7 +834,6 @@ struct roam_synch_frame_ind {
  * @vdev_stop_wakelock: wakelock to protect vdev stop op with firmware
  * @vdev_set_key_wakelock: wakelock to protect vdev set key op with firmware
  * @channel: channel
- * @roam_offload_enabled: is roam offload enable/disable
  * @roam_scan_stats_req: cached roam scan stats request
  *
  * It stores parameters per vdev in wma.
@@ -891,7 +886,6 @@ struct wma_txrx_node {
 	uint32_t nwType;
 	void *staKeyParams;
 	uint32_t peer_count;
-	qdf_spinlock_t peer_lock;
 	bool roam_synch_in_progress;
 	void *plink_status_req;
 	void *psnr_req;
@@ -927,7 +921,6 @@ struct wma_txrx_node {
 	qdf_wake_lock_t vdev_set_key_wakelock;
 	struct roam_synch_frame_ind roam_synch_frame_ind;
 	bool is_waiting_for_key;
-	bool roam_offload_enabled;
 	uint8_t channel;
 	struct sir_roam_scan_stats *roam_scan_stats_req;
 };
@@ -1041,6 +1034,7 @@ struct wma_valid_channels {
  * @get_sta_peer_info: Is a "get peer info" request active?
  * @peer_macaddr: When @get_one_peer_info is true, the peer's mac address
  * @thermal_mgmt_info: Thermal mitigation related info
+ * @roam_offload_enabled: is roam offload enable/disable
  * @ssdp: ssdp flag
  * @enable_mc_list: To Check if Multicast list filtering is enabled in FW
  * @ibss_started: is IBSS started or not
@@ -1055,7 +1049,6 @@ struct wma_valid_channels {
  * @wow_ap_assoc_lost_wl: wow wake lock for assoc lost req
  * @wow_auto_shutdown_wl: wow wake lock for shutdown req
  * @roam_ho_wl: wake lock for roam handoff req
- * @roam_preauth_wl: wake lock for roam preauth status
  * @wow_nack: wow negative ack flag
  * @is_wow_bus_suspended: is wow bus suspended flag
  * @wma_scan_comp_timer: scan completion timer
@@ -1100,8 +1093,6 @@ struct wma_valid_channels {
  *   event in the serialized MC thread context with a timer.
  * @csr_roam_synch_cb: CSR callback for firmware Roam Sync events
  * @pe_roam_synch_cb: pe callback for firmware Roam Sync events
- * @csr_roam_auth_event_handle_cb: CSR callback for target authentication
- * offload event.
  * @wmi_cmd_rsp_wake_lock: wmi command response wake lock
  * @wmi_cmd_rsp_runtime_lock: wmi command response bus lock
  * @apf_enabled: Is APF enabled in firmware?
@@ -1141,7 +1132,7 @@ struct wma_valid_channels {
 typedef struct {
 	void *wmi_handle;
 	void *cds_context;
-	tAniSirGlobal *mac_context;
+	void *mac_context;
 	struct wlan_objmgr_psoc *psoc;
 	struct wlan_objmgr_pdev *pdev;
 	qdf_event_t wma_resume_event;
@@ -1192,6 +1183,7 @@ typedef struct {
 	bool get_sta_peer_info;
 	struct qdf_mac_addr peer_macaddr;
 	t_thermal_mgmt thermal_mgmt_info;
+	bool roam_offload_enabled;
 	bool ssdp;
 	bool enable_mc_list;
 	uint8_t ibss_started;
@@ -1208,7 +1200,6 @@ typedef struct {
 	qdf_wake_lock_t wow_ap_assoc_lost_wl;
 	qdf_wake_lock_t wow_auto_shutdown_wl;
 	qdf_wake_lock_t roam_ho_wl;
-	qdf_wake_lock_t roam_preauth_wl;
 	int wow_nack;
 	qdf_atomic_t is_wow_bus_suspended;
 	qdf_mc_timer_t wma_scan_comp_timer;
@@ -1250,15 +1241,10 @@ typedef struct {
 		roam_offload_synch_ind *roam_synch_data,
 		tpSirBssDescription  bss_desc_ptr,
 		enum sir_roam_op_code reason);
-	QDF_STATUS (*csr_roam_auth_event_handle_cb)(tpAniSirGlobal mac,
-						    uint8_t vdev_id,
-						    struct qdf_mac_addr bssid);
 	QDF_STATUS (*pe_roam_synch_cb)(tpAniSirGlobal mac,
 		roam_offload_synch_ind *roam_synch_data,
 		tpSirBssDescription  bss_desc_ptr,
 		enum sir_roam_op_code reason);
-	QDF_STATUS (*pe_disconnect_cb) (tpAniSirGlobal mac,
-					uint8_t vdev_id);
 	qdf_wake_lock_t wmi_cmd_rsp_wake_lock;
 	qdf_runtime_lock_t wmi_cmd_rsp_runtime_lock;
 	bool apf_enabled;
@@ -1289,8 +1275,6 @@ typedef struct {
 	bool enable_peer_unmap_conf_support;
 	qdf_mc_timer_t wma_fw_time_sync_timer;
 	qdf_atomic_t critical_events_in_flight;
-	bool enable_tx_compl_tsf64;
-	bool enable_three_way_coex_config_legacy;
 } t_wma_handle, *tp_wma_handle;
 
 extern void cds_wma_complete_cback(void);
@@ -1966,27 +1950,8 @@ WLAN_PHY_MODE wma_chan_phy_mode(u8 chan, enum phy_ch_width chan_width,
 				u8 dot11_mode);
 
 #ifdef FEATURE_OEM_DATA_SUPPORT
-/**
- * wma_start_oem_req_cmd() - send oem request command to fw
- * @wma_handle: wma handle
- * @oem_data_req: the pointer of oem req buf
- *
- * Return: QDF status
- */
-QDF_STATUS wma_start_oem_req_cmd(tp_wma_handle wma_handle,
-				 struct oem_data_req *oem_data_req);
-#endif
-
-#ifdef FEATURE_OEM_DATA
-/**
- * wma_start_oem_data_cmd() - send oem data command to fw
- * @wma_handle: wma handle
- * @oem_data: the pointer of oem data buf
- *
- * Return: QDF status
- */
-QDF_STATUS wma_start_oem_data_cmd(tp_wma_handle wma_handle,
-				  struct oem_data *oem_data);
+QDF_STATUS wma_start_oem_data_req(tp_wma_handle wma_handle,
+				  struct oem_data_req *oem_req);
 #endif
 
 QDF_STATUS wma_enable_disable_caevent_ind(tp_wma_handle wma_handle,
@@ -2218,18 +2183,6 @@ QDF_STATUS wma_vdev_get_cfg_int(int cfg_id, int *value)
 }
 
 /**
- * wma_handle_roam_sync_timeout() - Update roaming status at wma layer
- * @wma_handle: wma handle
- * @info: Info for roaming start timer
- *
- * This function gets called in case of roaming offload timer get expired
- *
- * Return: None
- */
-void wma_handle_roam_sync_timeout(tp_wma_handle wma_handle,
-				  struct roam_sync_timeout_timer_info *info);
-
-/**
  * wma_vdev_get_dtim_period - Get dtim period value from mlme
  * @vdev_id: vdev index number
  * @value: pointer to the value to fill out
@@ -2370,24 +2323,6 @@ void wma_vdev_clear_pause_bit(uint8_t vdev_id, wmi_tx_pause_type bit_pos)
  */
 QDF_STATUS wma_process_roaming_config(tp_wma_handle wma_handle,
 				     tSirRoamOffloadScanReq *roam_req);
-
-#ifdef WLAN_FEATURE_ROAM_OFFLOAD
-/**
- * wma_send_roam_preauth_status() - Send the preauth status to wmi
- * @handle: WMA handle
- * @roam_req: Pointer to wmi_roam_auth_status_params from sae
- *
- * Return: None
- */
-void
-wma_send_roam_preauth_status(tp_wma_handle wma_handle,
-			     struct wmi_roam_auth_status_params *params);
-#else
-static inline void
-wma_send_roam_preauth_status(tp_wma_handle wma_handle,
-			     struct wmi_roam_auth_status_params *params)
-{}
-#endif
 
 #ifdef WMI_INTERFACE_EVENT_LOGGING
 static inline void wma_print_wmi_cmd_log(uint32_t count,
@@ -2605,26 +2540,4 @@ QDF_STATUS wma_config_bmiss_bcnt_params(uint32_t vdev_id, uint32_t first_cnt,
  */
 void wma_check_and_set_wake_timer(uint32_t time);
 
-/**
- * wma_force_objmgr_vdev_peer_cleanup() - Cleanup ObjMgr Vdev peers during SSR
- * @wma_handle: WMA handle
- * @vdev_id: vdev ID
- *
- * Return: none
- */
-void wma_force_objmgr_vdev_peer_cleanup(tp_wma_handle wma, uint8_t vdev_id);
-
-#ifdef FEATURE_ANI_LEVEL_REQUEST
-/**
- * wma_send_ani_level_request() - Send get ani level cmd to WMI
- * @wma_handle: wma handle.
- * @freqs: pointer to channels for which ANI level has to be retrieved
- * @num_freqs: number of channels in the above parameter
- *
- * Return: QDF_STATUS
- */
-QDF_STATUS wma_send_ani_level_request(tp_wma_handle wma_handle,
-				      uint32_t *freqs, uint8_t num_freqs);
-#endif /* FEATURE_ANI_LEVEL_REQUEST */
 #endif
-

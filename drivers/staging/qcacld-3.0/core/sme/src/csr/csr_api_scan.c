@@ -356,15 +356,22 @@ QDF_STATUS csr_scan_result_purge(tpAniSirGlobal pMac,
 }
 
 /* Add the channel to the occupiedChannels array */
-static void csr_add_to_occupied_channels(tpAniSirGlobal pMac,
-					 uint8_t ch,
-					 uint8_t sessionId,
-					 struct csr_channel *occupied_ch,
-					 bool is_init_list)
+static void csr_scan_add_to_occupied_channels(tpAniSirGlobal pMac,
+					struct tag_csrscan_result *pResult,
+					uint8_t sessionId,
+					struct csr_channel *occupied_ch,
+					tDot11fBeaconIEs *pIes,
+					bool is_init_list)
 {
 	QDF_STATUS status;
+	uint8_t ch;
 	uint8_t num_occupied_ch = occupied_ch->numChannels;
 	uint8_t *occupied_ch_lst = occupied_ch->channelList;
+
+	ch = pResult->Result.BssDescriptor.channelId;
+	if (!csr_neighbor_roam_connected_profile_match(pMac,
+						sessionId, pResult, pIes))
+		return;
 
 	if (is_init_list)
 		pMac->scan.roam_candidate_count[sessionId]++;
@@ -1274,7 +1281,6 @@ void csr_scan_callback(struct wlan_objmgr_vdev *vdev,
 	struct csr_roam_session *session;
 	uint32_t session_id = 0;
 	uint8_t chan = 0;
-	QDF_STATUS status;
 	bool success = false;
 
 	mac_ctx = (tpAniSirGlobal)arg;
@@ -1289,16 +1295,10 @@ void csr_scan_callback(struct wlan_objmgr_vdev *vdev,
 		scan_status = eCSR_SCAN_SUCCESS;
 
 	session_id = wlan_vdev_get_id(vdev);
-	status = sme_acquire_global_lock(&mac_ctx->sme);
-	if (QDF_IS_STATUS_ERROR(status))
-		return;
-
 	if (!CSR_IS_SESSION_VALID(mac_ctx, session_id)) {
 		sme_err("session %d is invalid", session_id);
-		sme_release_global_lock(&mac_ctx->sme);
 		return;
 	}
-
 	session = CSR_GET_SESSION(mac_ctx, session_id);
 
 	sme_debug("Scan Completion: status %d session %d scan_id %d",
@@ -1308,7 +1308,6 @@ void csr_scan_callback(struct wlan_objmgr_vdev *vdev,
 	if (session->scan_info.scan_id != event->scan_id) {
 		sme_debug("Scan Completion on wrong scan_id %d, expected %d",
 			session->scan_info.scan_id, event->scan_id);
-		sme_release_global_lock(&mac_ctx->sme);
 		return;
 	}
 #ifdef FEATURE_WLAN_DIAG_SUPPORT_CSR
@@ -1320,8 +1319,6 @@ void csr_scan_callback(struct wlan_objmgr_vdev *vdev,
 	/* We reuse the command here instead reissue a new command */
 	csr_handle_nxt_cmd(mac_ctx, NextCommand,
 			   session_id, chan);
-
-	sme_release_global_lock(&mac_ctx->sme);
 }
 
 tCsrScanResultInfo *csr_scan_result_get_first(tpAniSirGlobal pMac,
@@ -1666,7 +1663,7 @@ static void csr_save_tx_power_to_cfg(tpAniSirGlobal pMac, tDblLinkList *pList,
 				ch_pwr_set++;
 			}
 		} else {
-			if (cbLen + sizeof(tSirMacChanInfo) >= dataLen) {
+			if (cbLen >= dataLen) {
 				/* this entry will overflow our allocation */
 				sme_err(
 					"Buffer overflow, start %d, num %d, offset %d",
@@ -2222,10 +2219,6 @@ static enum wlan_auth_type csr_covert_auth_type_new(eCsrAuthType auth)
 		return WLAN_AUTH_TYPE_SUITEB_EAP_SHA384;
 	case eCSR_AUTH_TYPE_SAE:
 		return WLAN_AUTH_TYPE_SAE;
-	case eCSR_AUTH_TYPE_FT_SAE:
-		return WLAN_AUTH_TYPE_FT_SAE;
-	case eCSR_AUTH_TYPE_FT_SUITEB_EAP_SHA384:
-		return WLAN_AUTH_TYPE_FT_SUITEB_EAP_SHA384;
 	case eCSR_NUM_OF_SUPPORT_AUTH_TYPE:
 	default:
 		return WLAN_AUTH_TYPE_OPEN_SYSTEM;
@@ -2285,10 +2278,6 @@ static eCsrAuthType csr_covert_auth_type_old(enum wlan_auth_type auth)
 		return eCSR_AUTH_TYPE_SUITEB_EAP_SHA384;
 	case WLAN_AUTH_TYPE_SAE:
 		return eCSR_AUTH_TYPE_SAE;
-	case WLAN_AUTH_TYPE_FT_SAE:
-		return eCSR_AUTH_TYPE_FT_SAE;
-	case WLAN_AUTH_TYPE_FT_SUITEB_EAP_SHA384:
-		return eCSR_AUTH_TYPE_FT_SUITEB_EAP_SHA384;
 	case WLAN_NUM_OF_SUPPORT_AUTH_TYPE:
 	default:
 		return eCSR_AUTH_TYPE_OPEN_SYSTEM;
@@ -2446,31 +2435,6 @@ static enum wlan_phymode csr_convert_dotllmod_phymode(eCsrPhyMode dotllmode)
 	return con_phy_mode;
 }
 
-#ifdef WLAN_ADAPTIVE_11R
-/**
- * csr_update_adaptive_11r_scan_filter - Copy adaptive 11r ini to scan
- * module
- * @mac_ctx: Pointer to mac_context
- * @scan_filter: Scan filter to be sent to scan module
- *
- * Return: None
- */
-static void
-csr_update_adaptive_11r_scan_filter(tpAniSirGlobal mac_ctx,
-				    struct scan_filter *filter)
-{
-	filter->enable_adaptive_11r =
-		mac_ctx->roam.configParam.enable_adaptive_11r;
-}
-#else
-static inline void
-csr_update_adaptive_11r_scan_filter(tpAniSirGlobal mac_ctx,
-				    struct scan_filter *filter)
-{
-	filter->enable_adaptive_11r = false;
-}
-#endif
-
 static QDF_STATUS csr_prepare_scan_filter(tpAniSirGlobal mac_ctx,
 	tCsrScanResultFilter *pFilter, struct scan_filter *filter)
 {
@@ -2579,9 +2543,6 @@ static QDF_STATUS csr_prepare_scan_filter(tpAniSirGlobal mac_ctx,
 		filter->bss_scoring_required = true;
 	else
 		filter->bss_scoring_required = false;
-
-	csr_update_adaptive_11r_scan_filter(mac_ctx, filter);
-
 	if (!pFilter->BSSIDs.numOfBSSIDs) {
 		if (policy_mgr_map_concurrency_mode(
 		   &pFilter->csrPersona, &new_mode)) {
@@ -2662,17 +2623,6 @@ static QDF_STATUS csr_fill_bss_from_scan_entry(tpAniSirGlobal mac_ctx,
 	struct tag_csrscan_result *bss;
 	uint32_t bss_len, alloc_len, ie_len;
 	QDF_STATUS status;
-	enum channel_state ap_channel_state;
-
-	ap_channel_state =
-		wlan_reg_get_channel_state(mac_ctx->pdev,
-					   scan_entry->channel.chan_idx);
-	if (ap_channel_state == CHANNEL_STATE_DISABLE ||
-	    ap_channel_state == CHANNEL_STATE_INVALID) {
-		sme_err("BSS %pM channel %d invalid, not populating this BSSID",
-			scan_entry->bssid.bytes, scan_entry->channel.chan_idx);
-		return QDF_STATUS_E_INVAL;
-	}
 
 	ie_len = util_scan_entry_ie_len(scan_entry);
 	ie_ptr = util_scan_entry_ie_data(scan_entry);
@@ -2751,7 +2701,6 @@ static QDF_STATUS csr_fill_bss_from_scan_entry(tpAniSirGlobal mac_ctx,
 			  IEEE80211_FC0_SUBTYPE_PROBE_RESP);
 	bss_desc->seq_ctrl = hdr->seqControl;
 	bss_desc->tsf_delta = scan_entry->tsf_delta;
-	bss_desc->adaptive_11r_ap = scan_entry->adaptive_11r_ap;
 
 	qdf_mem_copy((uint8_t *) &bss_desc->ieFields,
 		ie_ptr, ie_len);
@@ -2796,20 +2745,24 @@ static QDF_STATUS csr_parse_scan_list(tpAniSirGlobal mac_ctx,
 	struct scan_result_list *ret_list,
 	qdf_list_t *scan_list)
 {
+	QDF_STATUS status = QDF_STATUS_SUCCESS;
 	struct tag_csrscan_result *pResult = NULL;
 	struct scan_cache_node *cur_node = NULL;
 	struct scan_cache_node *next_node = NULL;
 
-	qdf_list_peek_front(scan_list, (qdf_list_node_t **) &cur_node);
+	status =
+		qdf_list_peek_front(scan_list,
+		   (qdf_list_node_t **) &cur_node);
 
 	while (cur_node) {
 		qdf_list_peek_next(
 		  scan_list,
 		  (qdf_list_node_t *) cur_node,
 		  (qdf_list_node_t **) &next_node);
-		pResult = NULL;
-		csr_fill_bss_from_scan_entry(mac_ctx, cur_node->entry,
-					     &pResult);
+		status = csr_fill_bss_from_scan_entry(mac_ctx,
+			cur_node->entry, &pResult);
+		if (QDF_IS_STATUS_ERROR(status))
+			return status;
 		if (pResult)
 			csr_ll_insert_tail(&ret_list->List, &pResult->Link,
 			   LL_ACCESS_NOLOCK);
@@ -2817,7 +2770,7 @@ static QDF_STATUS csr_parse_scan_list(tpAniSirGlobal mac_ctx,
 		next_node = NULL;
 	}
 
-	return QDF_STATUS_SUCCESS;
+	return status;
 }
 
 /**
@@ -3181,23 +3134,16 @@ void csr_remove_bssid_from_scan_list(tpAniSirGlobal mac_ctx,
 void csr_init_occupied_channels_list(tpAniSirGlobal mac_ctx,
 	uint8_t sessionId)
 {
-	qdf_list_t *list = NULL;
-	struct wlan_objmgr_pdev *pdev = NULL;
-	qdf_list_node_t *cur_lst = NULL;
-	qdf_list_node_t *next_lst = NULL;
-	struct scan_cache_node *cur_node = NULL;
-	struct scan_filter *filter;
+	tScanResultHandle results;
+	struct scan_result_list *scan_list = NULL;
+	QDF_STATUS status = QDF_STATUS_SUCCESS;
+	tListElem *scan_entry = NULL;
+	struct tag_csrscan_result *bss_desc = NULL;
+	tDot11fBeaconIEs *ie_ptr = NULL;
 	tpCsrNeighborRoamControlInfo neighbor_roam_info =
 		&mac_ctx->roam.neighborRoamInfo[sessionId];
-	tCsrRoamConnectedProfile *profile = NULL;
-	uint8_t ch;
 
-	if (!(mac_ctx && mac_ctx->roam.roamSession &&
-	      CSR_IS_SESSION_VALID(mac_ctx, sessionId))) {
-		sme_debug("Invalid session");
-		return;
-	}
-	if (neighbor_roam_info->cfgParams.specific_chan_info.numOfChannels) {
+	if (neighbor_roam_info->cfgParams.channelInfo.numOfChannels) {
 		/*
 		 * Ini file contains neighbor scan channel list, hence NO need
 		 * to build occupied channel list"
@@ -3206,34 +3152,12 @@ void csr_init_occupied_channels_list(tpAniSirGlobal mac_ctx,
 		return;
 	}
 
-	profile = &mac_ctx->roam.roamSession[sessionId].connectedProfile;
-	if (!profile)
-		return;
-
-	filter = qdf_mem_malloc(sizeof(*filter));
-	if (!filter) {
-		sme_err("filter is NULL");
-		return;
-	}
-
-	filter->num_of_auth = 1;
-	filter->auth_type[0] = csr_covert_auth_type_new(profile->AuthType);
-	filter->num_of_enc_type = 1;
-	filter->enc_type[0] = csr_covert_enc_type_new(profile->EncryptionType);
-	filter->num_of_mc_enc_type = 1;
-	filter->mc_enc_type[0] =
-		csr_covert_enc_type_new(profile->mcEncryptionType);
-	filter->num_of_ssid = 1;
-	filter->ssid_list[0].length = profile->SSID.length;
-	qdf_mem_copy(filter->ssid_list[0].ssid, profile->SSID.ssId,
-		     profile->SSID.length);
-	csr_update_pmf_cap_from_connected_profile(profile, filter);
-
-	pdev = wlan_objmgr_get_pdev_by_id(mac_ctx->psoc, 0, WLAN_LEGACY_MAC_ID);
-
-	if (!pdev) {
-		sme_err("pdev is NULL");
-		qdf_mem_free(filter);
+	if (!csr_neighbor_roam_is_new_connected_profile(mac_ctx, sessionId)) {
+		/*
+		 * Do not flush occupied list since current roam profile matches
+		 * previous
+		 */
+		sme_debug("Current roam profile matches prev");
 		return;
 	}
 
@@ -3241,41 +3165,39 @@ void csr_init_occupied_channels_list(tpAniSirGlobal mac_ctx,
 	mac_ctx->scan.occupiedChannels[sessionId].numChannels = 0;
 	mac_ctx->scan.roam_candidate_count[sessionId] = 0;
 
-	csr_add_to_occupied_channels(
-			mac_ctx, profile->operationChannel,
-			sessionId,
-			&mac_ctx->scan.occupiedChannels[sessionId],
-			true);
-	list = ucfg_scan_get_result(pdev, filter);
-	if (list)
-		sme_debug("num_entries %d", qdf_list_size(list));
-	if (!list || (list && !qdf_list_size(list))) {
-		sme_err("get scan result failed");
-		wlan_objmgr_pdev_release_ref(pdev, WLAN_LEGACY_MAC_ID);
-		qdf_mem_free(filter);
-		if (list)
-			ucfg_scan_purge_results(list);
-		return;
-	}
-
-	qdf_list_peek_front(list, &cur_lst);
-	while (cur_lst) {
-		cur_node = qdf_container_of(cur_lst, struct scan_cache_node,
-					    node);
-		ch = cur_node->entry->channel.chan_idx;
-		csr_add_to_occupied_channels(
-				mac_ctx, ch,
-				sessionId,
-				&mac_ctx->scan.occupiedChannels[sessionId],
+	status = csr_scan_get_result(mac_ctx, NULL, &results);
+		if (!QDF_IS_STATUS_SUCCESS(status))
+			return;
+	scan_list = results;
+	csr_ll_lock(&scan_list->List);
+	scan_entry = csr_ll_peek_head(&scan_list->List, LL_ACCESS_NOLOCK);
+	while (scan_entry) {
+		bss_desc = GET_BASE_ADDR(scan_entry, struct tag_csrscan_result,
+					 Link);
+		ie_ptr = (tDot11fBeaconIEs *) (bss_desc->Result.pvIes);
+		if (!ie_ptr && !QDF_IS_STATUS_SUCCESS(
+			csr_get_parsed_bss_description_ies(mac_ctx,
+				&bss_desc->Result.BssDescriptor, &ie_ptr))) {
+			/* Pick next bss entry before continuing */
+			scan_entry = csr_ll_next(&scan_list->List, scan_entry,
+				     LL_ACCESS_NOLOCK);
+			continue;
+		}
+		csr_scan_add_to_occupied_channels(mac_ctx, bss_desc, sessionId,
+				&mac_ctx->scan.occupiedChannels[sessionId], ie_ptr,
 				true);
-		qdf_list_peek_next(list, cur_lst, &next_lst);
-		cur_lst = next_lst;
-		next_lst = NULL;
+		/*
+		 * Free the memory allocated for pIes in
+		 * csr_get_parsed_bss_description_ies
+		 */
+		if ((bss_desc->Result.pvIes == NULL) && ie_ptr)
+			qdf_mem_free(ie_ptr);
+		scan_entry = csr_ll_next(&scan_list->List, scan_entry,
+				     LL_ACCESS_NOLOCK);
 	}
+	csr_ll_unlock(&scan_list->List);
 
-	qdf_mem_free(filter);
-	ucfg_scan_purge_results(list);
-	wlan_objmgr_pdev_release_ref(pdev, WLAN_LEGACY_MAC_ID);
+	csr_scan_result_purge(mac_ctx, scan_list);
 }
 
 /**

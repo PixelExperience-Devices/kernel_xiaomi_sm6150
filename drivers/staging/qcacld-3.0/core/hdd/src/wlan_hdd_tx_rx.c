@@ -41,7 +41,6 @@
 #include <net/cfg80211.h>
 #include <net/ieee80211_radiotap.h>
 #include "sap_api.h"
-#include "sme_power_save_api.h"
 #include "wlan_hdd_wmm.h"
 #include "wlan_hdd_tdls.h"
 #include "wlan_hdd_ocb.h"
@@ -62,7 +61,7 @@
 
 #include "wlan_hdd_nud_tracking.h"
 
-#if defined(QCA_LL_TX_FLOW_CONTROL_V2) || defined(QCA_LL_PDEV_TX_FLOW_CONTROL)
+#ifdef QCA_LL_TX_FLOW_CONTROL_V2
 /*
  * Mapping Linux AC interpretation to SME AC.
  * Host has 5 tx queues, 4 flow-controlled queues for regular traffic and
@@ -1765,18 +1764,6 @@ static inline void hdd_tsf_timestamp_rx(struct hdd_context *hdd_ctx,
 }
 #endif
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 6, 0))
-static bool hdd_is_gratuitous_arp_unsolicited_na(struct sk_buff *skb)
-{
-	return false;
-}
-#else
-static bool hdd_is_gratuitous_arp_unsolicited_na(struct sk_buff *skb)
-{
-	return cfg80211_is_gratuitous_arp_unsolicited_na(skb);
-}
-#endif
-
 /**
  * hdd_rx_packet_cbk() - Receive packet handler
  * @context: pointer to HDD context
@@ -1861,7 +1848,7 @@ QDF_STATUS hdd_rx_packet_cbk(void *context, qdf_nbuf_t rxBuf)
 
 		sta_ctx = WLAN_HDD_GET_STATION_CTX_PTR(adapter);
 		if ((sta_ctx->conn_info.proxyARPService) &&
-		    hdd_is_gratuitous_arp_unsolicited_na(skb)) {
+		    cfg80211_is_gratuitous_arp_unsolicited_na(skb)) {
 			qdf_atomic_inc(&adapter->hdd_stats.tx_rx_stats.
 						rx_usolict_arp_n_mcast_drp);
 			/* Remove SKB from internal tracking table before
@@ -2557,7 +2544,6 @@ void hdd_reset_tcp_delack(struct hdd_context *hdd_ctx)
  *
  * Return: True if vote level is high
  */
-#ifdef RX_PERFORMANCE
 bool hdd_is_current_high_throughput(struct hdd_context *hdd_ctx)
 {
 	if (hdd_ctx->cur_vote_level < PLD_BUS_WIDTH_HIGH)
@@ -2565,5 +2551,4 @@ bool hdd_is_current_high_throughput(struct hdd_context *hdd_ctx)
 	else
 		return true;
 }
-#endif
 #endif /* MSM_PLATFORM */

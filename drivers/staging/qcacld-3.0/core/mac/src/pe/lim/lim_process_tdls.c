@@ -2658,7 +2658,7 @@ static QDF_STATUS lim_tdls_del_sta(tpAniSirGlobal pMac,
 	pStaDs = dph_lookup_hash_entry(pMac, peerMac.bytes, &peerIdx,
 				       &psessionEntry->dph.dphHashTable);
 
-	if (pStaDs && pStaDs->staType == STA_ENTRY_TDLS_PEER) {
+	if (pStaDs) {
 		pe_debug("DEL STA peer MAC: "MAC_ADDRESS_STR,
 			 MAC_ADDR_ARRAY(pStaDs->staAddr));
 
@@ -2669,7 +2669,7 @@ static QDF_STATUS lim_tdls_del_sta(tpAniSirGlobal pMac,
 
 		status = lim_del_sta(pMac, pStaDs, resp_reqd, psessionEntry);
 	} else {
-		pe_debug("TDLS peer "MAC_ADDRESS_STR" not found",
+		pe_debug("DEL STA peer MAC: "MAC_ADDRESS_STR" not found",
 			 MAC_ADDR_ARRAY(peerMac.bytes));
 	}
 
@@ -3285,20 +3285,16 @@ void lim_process_tdls_del_sta_rsp(tpAniSirGlobal mac_ctx,
 		return;
 	}
 
-	qdf_mem_copy(peer_mac.bytes,
-		     del_sta_params->staMac, QDF_MAC_ADDR_SIZE);
-
 	sta_ds = dph_lookup_hash_entry(mac_ctx, del_sta_params->staMac,
 			&peer_idx, &session_entry->dph.dphHashTable);
 	if (!sta_ds) {
-		pe_err("DPH Entry for STA: %X is missing release the serialization command",
-		       DPH_STA_HASH_INDEX_PEER);
-		lim_send_sme_tdls_del_sta_rsp(mac_ctx,
-					      session_entry->smeSessionId,
-					      peer_mac, NULL,
-					      QDF_STATUS_SUCCESS);
+		pe_err("DPH Entry for STA: %X is missing",
+			DPH_STA_HASH_INDEX_PEER);
 		goto skip_event;
 	}
+
+	qdf_mem_copy(peer_mac.bytes,
+			del_sta_params->staMac, QDF_MAC_ADDR_SIZE);
 
 	if (QDF_STATUS_SUCCESS != del_sta_params->status) {
 		pe_err("DEL STA failed!");

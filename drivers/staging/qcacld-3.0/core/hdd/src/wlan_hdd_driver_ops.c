@@ -154,7 +154,7 @@ static void hdd_hif_init_driver_state_callbacks(void *data,
  *
  * Return: None
  */
-#ifdef SLUB_MEM_OPTIMIZE
+#ifdef QCS403_MEM_OPTIMIZE
 static void hdd_hif_set_attribute(struct hif_opaque_softc *hif_ctx)
 {
 	hif_set_attribute(hif_ctx, HIF_LOWDESC_CE_NO_PKTLOG_CFG);
@@ -569,7 +569,7 @@ static void hdd_send_hang_reason(void)
 	enum qdf_hang_reason reason = QDF_REASON_UNSPECIFIED;
 	struct hdd_context *hdd_ctx = cds_get_context(QDF_MODULE_ID_HDD);
 
-	if (!hdd_ctx)
+	if (wlan_hdd_validate_context(hdd_ctx))
 		return;
 
 	cds_get_recovery_reason(&reason);
@@ -594,12 +594,6 @@ static void wlan_hdd_shutdown(void)
 		hdd_err("Failed to get HIF context, ignore SSR shutdown");
 		return;
 	}
-
-	if (!hdd_ctx) {
-		hdd_err("Failed to get HDD context, ignore SSR shutdown");
-		return;
-	}
-
 	/* mask the host controller interrupts */
 	hif_mask_interrupt_call(hif_ctx);
 
@@ -1604,7 +1598,8 @@ static void wlan_hdd_pld_uevent(struct device *dev,
 
 	wlan_hdd_set_the_pld_uevent(uevent);
 
-	hdd_psoc_idle_timer_stop(hdd_ctx);
+	qdf_cancel_delayed_work(&hdd_ctx->iface_idle_work);
+
 	mutex_lock(&hdd_init_deinit_lock);
 	wlan_hdd_handle_the_pld_uevent(uevent);
 	mutex_unlock(&hdd_init_deinit_lock);
@@ -1641,33 +1636,6 @@ static int wlan_hdd_pld_runtime_resume(struct device *dev,
 }
 #endif
 
-/**
- * wlan_hdd_pld_idle_shutdown() - wifi module idle shutdown after interface
- *                                inactivity timeout has trigerred idle shutdown
- * @dev: device to remove
- * @pld_bus_type: PLD bus type
- *
- * Return: 0 for success and negative error code for failure
- */
-static int wlan_hdd_pld_idle_shutdown(struct device *dev,
-				       enum pld_bus_type bus_type)
-{
-	return hdd_psoc_idle_shutdown(dev);
-}
-
-/**
- * wlan_hdd_pld_idle_restart() - wifi module idle restart after idle shutdown
- * @dev: device to remove
- * @pld_bus_type: PLD bus type
- *
- * Return: 0 for success and negative error code for failure
- */
-static int wlan_hdd_pld_idle_restart(struct device *dev,
-				     enum pld_bus_type bus_type)
-{
-	return hdd_psoc_idle_restart(dev);
-}
-
 struct pld_driver_ops wlan_drv_ops = {
 	.probe      = wlan_hdd_pld_probe,
 	.remove     = wlan_hdd_pld_remove,
@@ -1685,9 +1653,6 @@ struct pld_driver_ops wlan_drv_ops = {
 	.runtime_suspend = wlan_hdd_pld_runtime_suspend,
 	.runtime_resume = wlan_hdd_pld_runtime_resume,
 #endif
-	.idle_shutdown = wlan_hdd_pld_idle_shutdown,
-	.idle_restart = wlan_hdd_pld_idle_restart,
-
 };
 
 int wlan_hdd_register_driver(void)

@@ -275,8 +275,7 @@ static bool lim_chk_assoc_req_parse_error(tpAniSirGlobal mac_ctx,
 
 	if (sub_type == LIM_ASSOC)
 		status = sir_convert_assoc_req_frame2_struct(mac_ctx, frm_body,
-							     frame_len,
-							     assoc_req);
+							frame_len, assoc_req);
 	else
 		status = sir_convert_reassoc_req_frame2_struct(mac_ctx,
 						frm_body, frame_len, assoc_req);
@@ -1853,9 +1852,10 @@ void lim_process_assoc_req_frame(tpAniSirGlobal mac_ctx, uint8_t *rx_pkt_info,
 	hdr = WMA_GET_RX_MAC_HEADER(rx_pkt_info);
 	frame_len = WMA_GET_RX_PAYLOAD_LEN(rx_pkt_info);
 
-	pe_debug("Rcvd: %s Req Frame sessionid: %d systemrole: %d MlmState: %d from: "
-		   MAC_ADDRESS_STR,
+	pe_info("Rx %s Req frame SN=%d s_id: %d s_role: %d MlmST: %d from: "
+		MAC_ADDRESS_STR,
 		(LIM_ASSOC == sub_type) ? "Assoc" : "ReAssoc",
+		((hdr->seqControl.seqNumHi << 4) | hdr->seqControl.seqNumLo),
 		session->peSessionId, GET_LIM_SYSTEM_ROLE(session),
 		session->limMlmState, MAC_ADDR_ARRAY(hdr->sa));
 

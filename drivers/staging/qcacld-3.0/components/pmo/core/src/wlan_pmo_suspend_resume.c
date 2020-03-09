@@ -106,7 +106,7 @@ static QDF_STATUS pmo_core_calculate_listen_interval(
 			struct pmo_vdev_priv_obj *vdev_ctx,
 			uint32_t *listen_interval)
 {
-	uint32_t max_mod_dtim, max_dtim;
+	uint32_t max_mod_dtim;
 	uint32_t beacon_interval_mod;
 	struct pmo_psoc_cfg *psoc_cfg = &vdev_ctx->pmo_psoc_ctx->psoc_cfg;
 	struct pmo_psoc_priv_obj *psoc_priv = pmo_vdev_get_psoc_priv(vdev);
@@ -131,15 +131,9 @@ static QDF_STATUS pmo_core_calculate_listen_interval(
 		if (beacon_interval_mod == 0)
 			beacon_interval_mod = 1;
 
-		max_dtim = pmo_core_get_vdev_dtim_period(vdev) *
-					beacon_interval_mod;
-
-		if (!max_dtim) {
-			pmo_err("Invalid dtim period");
-			return QDF_STATUS_E_INVAL;
-		}
-
-		max_mod_dtim = psoc_cfg->sta_max_li_mod_dtim / max_dtim;
+		max_mod_dtim = psoc_cfg->sta_max_li_mod_dtim /
+			(pmo_core_get_vdev_dtim_period(vdev)
+			 * beacon_interval_mod);
 
 		if (max_mod_dtim <= 0)
 			max_mod_dtim = 1;
@@ -165,78 +159,6 @@ static QDF_STATUS pmo_core_calculate_listen_interval(
 		*listen_interval = cfg_value;
 	}
 	return QDF_STATUS_SUCCESS;
-}
-
-static void pmo_configure_vdev_suspend_params(
-					struct wlan_objmgr_psoc *psoc,
-					struct wlan_objmgr_vdev *vdev,
-					struct pmo_vdev_priv_obj *vdev_ctx)
-{
-	QDF_STATUS ret;
-	uint8_t vdev_id;
-	enum QDF_OPMODE opmode = pmo_core_get_vdev_op_mode(vdev);
-	struct pmo_psoc_cfg *psoc_cfg = &vdev_ctx->pmo_psoc_ctx->psoc_cfg;
-	uint8_t  ito_repeat_count_value = 0;
-	uint32_t non_wow_inactivity_time, wow_inactivity_time;
-
-	pmo_enter();
-
-	vdev_id = pmo_vdev_get_id(vdev);
-	if (!PMO_VDEV_IN_STA_MODE(opmode))
-		return;
-	ret = pmo_tgt_send_vdev_sta_ps_param(vdev,
-					pmo_sta_ps_param_inactivity_time,
-					psoc_cfg->wow_data_inactivity_timeout);
-	if (QDF_IS_STATUS_ERROR(ret)) {
-		pmo_debug("Failed to Set wow inactivity timeout vdevId %d",
-			  vdev_id);
-	}
-
-	non_wow_inactivity_time = psoc_cfg->ps_data_inactivity_timeout;
-	wow_inactivity_time = psoc_cfg->wow_data_inactivity_timeout;
-	/*
-	 * To keep ito repeat count same in wow mode as in non wow mode,
-	 * modulating ito repeat count value.
-	 */
-	ito_repeat_count_value = (non_wow_inactivity_time /
-				  wow_inactivity_time) *
-					psoc_cfg->ito_repeat_count;
-	if (ito_repeat_count_value)
-		ret = pmo_tgt_send_vdev_sta_ps_param(vdev,
-					pmo_sta_ps_param_ito_repeat_count,
-					psoc_cfg->wow_data_inactivity_timeout);
-	if (QDF_IS_STATUS_ERROR(ret)) {
-		pmo_err("Failed to Set ito repeat count vdevId %d",
-			vdev_id);
-	}
-
-	pmo_exit();
-}
-
-static void pmo_configure_vdev_resume_params(
-					struct wlan_objmgr_psoc *psoc,
-					struct wlan_objmgr_vdev *vdev,
-					struct pmo_vdev_priv_obj *vdev_ctx)
-{
-	QDF_STATUS ret;
-	uint8_t vdev_id;
-	enum QDF_OPMODE opmode = pmo_core_get_vdev_op_mode(vdev);
-	struct pmo_psoc_cfg *psoc_cfg = &vdev_ctx->pmo_psoc_ctx->psoc_cfg;
-
-	pmo_enter();
-
-	vdev_id = pmo_vdev_get_id(vdev);
-	if (!PMO_VDEV_IN_STA_MODE(opmode))
-		return;
-	ret = pmo_tgt_send_vdev_sta_ps_param(vdev,
-					 pmo_sta_ps_param_inactivity_time,
-					 psoc_cfg->ps_data_inactivity_timeout);
-	if (QDF_IS_STATUS_ERROR(ret)) {
-		pmo_debug("Failed to Set inactivity timeout vdevId %d",
-			  vdev_id);
-	}
-
-	pmo_exit();
 }
 
 /**
@@ -337,7 +259,6 @@ static void pmo_core_set_suspend_dtim(struct wlan_objmgr_psoc *psoc)
 		if (!pmo_is_listen_interval_user_set(vdev_ctx)
 		    && !li_offload_support)
 			pmo_core_set_vdev_suspend_dtim(psoc, vdev, vdev_ctx);
-		pmo_configure_vdev_suspend_params(psoc, vdev, vdev_ctx);
 		pmo_vdev_put_ref(vdev);
 	}
 }
@@ -576,7 +497,6 @@ static void pmo_core_set_resume_dtim(struct wlan_objmgr_psoc *psoc)
 		if (!pmo_is_listen_interval_user_set(vdev_ctx)
 		    && !li_offload_support)
 			pmo_core_set_vdev_resume_dtim(psoc, vdev, vdev_ctx);
-		pmo_configure_vdev_resume_params(psoc, vdev, vdev_ctx);
 		pmo_vdev_put_ref(vdev);
 	}
 }
@@ -1428,7 +1348,6 @@ QDF_STATUS pmo_core_config_modulated_dtim(struct wlan_objmgr_vdev *vdev,
 	uint32_t max_mod_dtim;
 	QDF_STATUS status;
 	uint8_t vdev_id;
-	uint32_t max_dtim;
 
 	pmo_enter();
 
@@ -1446,18 +1365,9 @@ QDF_STATUS pmo_core_config_modulated_dtim(struct wlan_objmgr_vdev *vdev,
 	if (!beacon_interval_mod)
 		beacon_interval_mod = 1;
 
-	max_dtim = (pmo_core_get_vdev_dtim_period(vdev)
-		 * beacon_interval_mod);
-
-	if (!max_dtim) {
-		pmo_err("Invalid dtim period");
-		pmo_vdev_put_ref(vdev);
-		return QDF_STATUS_E_INVAL;
-	}
-
 	max_mod_dtim = psoc_cfg->sta_max_li_mod_dtim /
-		max_dtim;
-
+		(pmo_core_get_vdev_dtim_period(vdev)
+		 * beacon_interval_mod);
 	if (!max_mod_dtim)
 		max_mod_dtim = 1;
 

@@ -134,7 +134,6 @@ struct sap_context {
 	uint32_t channel;
 	uint32_t secondary_ch;
 
-	qdf_mutex_t *acs_ch_list_protect;
 	/* Include the SME(CSR) sessionId here */
 	uint8_t sessionId;
 
@@ -337,6 +336,11 @@ sap_print_acl(struct qdf_mac_addr *macList, uint8_t size);
 bool
 sap_search_mac_list(struct qdf_mac_addr *macList, uint8_t num_mac,
 		 uint8_t *peerMac, uint8_t *index);
+
+#ifdef FEATURE_WLAN_CH_AVOID
+void sap_update_unsafe_channel_list(tHalHandle hal,
+				    struct sap_context *sap_ctx);
+#endif /* FEATURE_WLAN_CH_AVOID */
 
 QDF_STATUS sap_init_dfs_channel_nol_list(struct sap_context *sapContext);
 

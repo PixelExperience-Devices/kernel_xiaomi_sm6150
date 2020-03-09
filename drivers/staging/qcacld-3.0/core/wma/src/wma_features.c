@@ -395,15 +395,11 @@ int wma_vdev_tsf_handler(void *handle, uint8_t *data, uint32_t data_len)
 	ptsf->tsf_high = tsf_event->tsf_high;
 	ptsf->soc_timer_low = tsf_event->qtimer_low;
 	ptsf->soc_timer_high = tsf_event->qtimer_high;
-	ptsf->global_tsf_low = tsf_event->wlan_global_tsf_low;
-	ptsf->global_tsf_high = tsf_event->wlan_global_tsf_high;
+
 	WMA_LOGD("%s: receive WMI_VDEV_TSF_REPORT_EVENTID ", __func__);
 	WMA_LOGD("%s: vdev_id = %u,tsf_low =%u, tsf_high = %u", __func__,
 	ptsf->vdev_id, ptsf->tsf_low, ptsf->tsf_high);
 
-	WMA_LOGD("%s,g_tsf: %d %d; soc_timer: %d %d",
-		 __func__, ptsf->global_tsf_low, ptsf->global_tsf_high,
-		 ptsf->soc_timer_low, ptsf->soc_timer_high);
 	tsf_msg.type = eWNI_SME_TSF_EVENT;
 	tsf_msg.bodyptr = ptsf;
 	tsf_msg.bodyval = 0;
@@ -948,46 +944,6 @@ QDF_STATUS wma_get_peer_info_ext(WMA_HANDLE handle,
 	return QDF_STATUS_SUCCESS;
 }
 
-QDF_STATUS wma_get_isolation(tp_wma_handle wma)
-{
-	wmi_coex_get_antenna_isolation_cmd_fixed_param *cmd;
-	wmi_buf_t wmi_buf;
-	uint32_t  len;
-	uint8_t *buf_ptr;
-
-	WMA_LOGD("%s: get isolation", __func__);
-
-	if (!wma || !wma->wmi_handle) {
-		WMA_LOGE("%s: WMA is closed, can not issue get isolation",
-			 __func__);
-		return QDF_STATUS_E_INVAL;
-	}
-
-	len  = sizeof(wmi_coex_get_antenna_isolation_cmd_fixed_param);
-	wmi_buf = wmi_buf_alloc(wma->wmi_handle, len);
-	if (!wmi_buf) {
-		WMA_LOGE("%s: wmi_buf_alloc failed", __func__);
-		return QDF_STATUS_E_NOMEM;
-	}
-	buf_ptr = (uint8_t *)wmi_buf_data(wmi_buf);
-
-	cmd = (wmi_coex_get_antenna_isolation_cmd_fixed_param *)buf_ptr;
-	WMITLV_SET_HDR(
-	&cmd->tlv_header,
-	WMITLV_TAG_STRUC_wmi_coex_get_antenna_isolation_cmd_fixed_param,
-	WMITLV_GET_STRUCT_TLVLEN(
-	wmi_coex_get_antenna_isolation_cmd_fixed_param));
-
-	if (wmi_unified_cmd_send(wma->wmi_handle, wmi_buf, len,
-				 WMI_COEX_GET_ANTENNA_ISOLATION_CMDID)) {
-		WMA_LOGE("Failed to get isolation request from fw");
-		wmi_buf_free(wmi_buf);
-		return QDF_STATUS_E_FAILURE;
-	}
-
-	return QDF_STATUS_SUCCESS;
-}
-
 /**
  * wma_add_beacon_filter() - Issue WMI command to set beacon filter
  * @wma: wma handler
@@ -1351,32 +1307,6 @@ static int wma_nan_rsp_event_handler(void *handle, uint8_t *event_buf,
 }
 #endif /* WLAN_FEATURE_NAN */
 
-static uint8_t *
-wma_parse_ch_switch_wrapper_ie(uint8_t *ch_wr_ie, uint8_t sub_ele_id)
-{
-	uint8_t len = 0, sub_ele_len = 0;
-	struct ie_header *ele;
-
-	ele = (struct ie_header *)ch_wr_ie;
-	if (ele->ie_id != WLAN_ELEMID_CHAN_SWITCH_WRAP ||
-	    ele->ie_len == 0)
-		return NULL;
-
-	len = ele->ie_len;
-	ele = (struct ie_header *)(ch_wr_ie + sizeof(struct ie_header));
-
-	while (len > 0) {
-		sub_ele_len = sizeof(struct ie_header) + ele->ie_len;
-		len -= sub_ele_len;
-		if (ele->ie_id == sub_ele_id)
-			return (uint8_t *)ele;
-
-		ele = (struct ie_header *)((uint8_t *)ele + sub_ele_len);
-	}
-
-	return NULL;
-}
-
 /**
  * wma_csa_offload_handler() - CSA event handler
  * @handle: wma handle
@@ -1456,32 +1386,12 @@ int wma_csa_offload_handler(void *handle, uint8_t *event, uint32_t len)
 		csa_offload_event->new_ch_width = wb_ie->new_ch_width;
 		csa_offload_event->new_ch_freq_seg1 = wb_ie->new_ch_freq_seg1;
 		csa_offload_event->new_ch_freq_seg2 = wb_ie->new_ch_freq_seg2;
-	} else if (csa_event->ies_present_flag &
-		   WMI_CSWRAP_IE_EXTENDED_PRESENT) {
-		wb_ie = (struct ieee80211_ie_wide_bw_switch *)
-				wma_parse_ch_switch_wrapper_ie(
-				(uint8_t *)&csa_event->cswrap_ie_extended,
-				WLAN_ELEMID_WIDE_BAND_CHAN_SWITCH);
-		if (wb_ie) {
-			csa_offload_event->new_ch_width = wb_ie->new_ch_width;
-			csa_offload_event->new_ch_freq_seg1 =
-						wb_ie->new_ch_freq_seg1;
-			csa_offload_event->new_ch_freq_seg2 =
-						wb_ie->new_ch_freq_seg2;
-			csa_event->ies_present_flag |= WMI_WBW_IE_PRESENT;
-		}
 	}
 
 	csa_offload_event->ies_present_flag = csa_event->ies_present_flag;
 
 	WMA_LOGD("CSA: New Channel = %d BSSID:%pM",
 		 csa_offload_event->channel, csa_offload_event->bssId);
-	WMA_LOGD("CSA: IEs Present Flag = 0x%x new ch width = %d ch center freq1 = %d ch center freq2 = %d new op class = %d",
-		 csa_event->ies_present_flag,
-		 csa_offload_event->new_ch_width,
-		 csa_offload_event->new_ch_freq_seg1,
-		 csa_offload_event->new_ch_freq_seg2,
-		 csa_offload_event->new_op_class);
 
 	cur_chan = cds_freq_to_chan(intr[vdev_id].mhz);
 	/*
@@ -1580,10 +1490,17 @@ int wma_oem_data_response_handler(void *handle,
 	return 0;
 }
 
-QDF_STATUS wma_start_oem_req_cmd(tp_wma_handle wma_handle,
-				 struct oem_data_req *oem_data_req)
+/**
+ * wma_start_oem_data_req() - start OEM data request to target
+ * @wma_handle: wma handle
+ * @oem_data_req: start request params
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS wma_start_oem_data_req(tp_wma_handle wma_handle,
+			    struct oem_data_req *oem_data_req)
 {
-	QDF_STATUS ret;
+	int ret = 0;
 
 	WMA_LOGD(FL("Send OEM Data Request to target"));
 
@@ -1598,10 +1515,9 @@ QDF_STATUS wma_start_oem_req_cmd(tp_wma_handle wma_handle,
 		return QDF_STATUS_E_INVAL;
 	}
 
-	/* legacy api, for oem data request case */
 	ret = wmi_unified_start_oem_data_cmd(wma_handle->wmi_handle,
-					     oem_data_req->data_len,
-					     oem_data_req->data);
+				   oem_data_req->data_len,
+				   oem_data_req->data);
 
 	if (!QDF_IS_STATUS_SUCCESS(ret))
 		WMA_LOGE(FL("wmi cmd send failed"));
@@ -1609,34 +1525,6 @@ QDF_STATUS wma_start_oem_req_cmd(tp_wma_handle wma_handle,
 	return ret;
 }
 #endif /* FEATURE_OEM_DATA_SUPPORT */
-
-#ifdef FEATURE_OEM_DATA
-QDF_STATUS wma_start_oem_data_cmd(tp_wma_handle wma_handle,
-				  struct oem_data *oem_data)
-{
-	QDF_STATUS ret;
-
-	wma_debug("Send OEM Data to target");
-
-	if (!oem_data || !oem_data->data) {
-		wma_err("oem_data is null");
-		return QDF_STATUS_E_INVAL;
-	}
-
-	if (!wma_handle || !wma_handle->wmi_handle) {
-		wma_err("WMA - closed");
-		return QDF_STATUS_E_INVAL;
-	}
-
-	/* common api, for oem data command case */
-	ret = wmi_unified_start_oemv2_data_cmd(wma_handle->wmi_handle,
-					       oem_data);
-	if (!QDF_IS_STATUS_SUCCESS(ret))
-		wma_err("call start wmi cmd failed");
-
-	return ret;
-}
-#endif
 
 #if !defined(REMOVE_PKT_LOG)
 /**
@@ -1724,8 +1612,6 @@ static const u8 *wma_wow_wake_reason_str(A_INT32 wake_reason)
 		return "IOAC_TIMER_EVENT";
 	case WOW_REASON_ROAM_HO:
 		return "ROAM_HO";
-	case WOW_REASON_ROAM_PREAUTH_START:
-		return "ROAM_PREAUTH_START_EVENT";
 	case WOW_REASON_DFS_PHYERR_RADADR_EVENT:
 		return "DFS_PHYERR_RADADR_EVENT";
 	case WOW_REASON_BEACON_RECV:
@@ -1871,12 +1757,6 @@ static void wma_print_wow_stats(t_wma_handle *wma,
 	vdev = wlan_objmgr_get_vdev_by_id_from_psoc(wma->psoc,
 						    wake_info->vdev_id,
 						    WLAN_LEGACY_WMA_ID);
-	if (!vdev) {
-		WMA_LOGE("%s, vdev_id: %d, failed to get vdev from psoc",
-			 __func__, wake_info->vdev_id);
-		return;
-	}
-
 	ucfg_mc_cp_stats_get_vdev_wake_lock_stats(vdev, &stats);
 	wlan_objmgr_vdev_release_ref(vdev, WLAN_LEGACY_WMA_ID);
 	wma_wow_stats_display(&stats);
@@ -2099,9 +1979,6 @@ static int wow_get_wmi_eventid(int32_t reason, uint32_t tag)
 	case WOW_REASON_11D_SCAN:
 		event_id = WMI_11D_NEW_COUNTRY_EVENTID;
 		break;
-	case WOW_ROAM_PREAUTH_START_EVENT:
-		event_id = WMI_ROAM_PREAUTH_STATUS_CMDID;
-		break;
 	default:
 		WMA_LOGD(FL("No Event Id for WOW reason %s(%d)"),
 			 wma_wow_wake_reason_str(reason), reason);
@@ -2239,7 +2116,7 @@ wma_wow_get_pkt_proto_subtype(uint8_t *data, uint32_t len)
 	eth_type = *(uint16_t *)(data + QDF_NBUF_TRAC_ETH_TYPE_OFFSET);
 	eth_type = qdf_cpu_to_be16(eth_type);
 
-	WMA_LOGD("Ether Type: 0x%04x", eth_type);
+	WMA_LOGI("Ether Type: 0x%04x", eth_type);
 	switch (eth_type) {
 	case QDF_NBUF_TRAC_EAPOL_ETH_TYPE:
 		if (len < WMA_EAPOL_SUBTYPE_GET_MIN_LEN)
@@ -2740,10 +2617,6 @@ static void wma_acquire_wow_wakelock(t_wma_handle *wma, int wake_reason)
 	case WOW_REASON_ROAM_HO:
 		wl = &wma->roam_ho_wl;
 		ms = WMA_ROAM_HO_WAKE_LOCK_DURATION;
-		break;
-	case WOW_REASON_ROAM_PREAUTH_START:
-		wl = &wma->roam_preauth_wl;
-		ms = WMA_ROAM_PREAUTH_WAKE_LOCK_DURATION;
 		break;
 	default:
 		return;
@@ -3780,19 +3653,21 @@ QDF_STATUS wma_process_add_periodic_tx_ptrn_ind(WMA_HANDLE handle,
 		return QDF_STATUS_E_INVAL;
 	}
 
+	params_ptr = qdf_mem_malloc(sizeof(*params_ptr));
+
+	if (!params_ptr) {
+		WMA_LOGE(
+			"%s: unable to allocate memory for periodic_tx_pattern",
+			 __func__);
+		return QDF_STATUS_E_NOMEM;
+	}
+
 	if (!wma_find_vdev_by_addr(wma_handle,
 				   pAddPeriodicTxPtrnParams->mac_address.bytes,
 				   &vdev_id)) {
 		WMA_LOGE("%s: Failed to find vdev id for %pM", __func__,
 			 pAddPeriodicTxPtrnParams->mac_address.bytes);
 		return QDF_STATUS_E_INVAL;
-	}
-
-	params_ptr = qdf_mem_malloc(sizeof(*params_ptr));
-	if (!params_ptr) {
-		WMA_LOGE("%s: unable to allocate memory for periodic_tx_pattern",
-			__func__);
-		return QDF_STATUS_E_NOMEM;
 	}
 
 	params_ptr->ucPtrnId = pAddPeriodicTxPtrnParams->ucPtrnId;
@@ -6176,50 +6051,3 @@ int wma_vdev_bss_color_collision_info_handler(void *handle,
 
 	return 0;
 }
-
-#ifdef FEATURE_ANI_LEVEL_REQUEST
-int wma_get_ani_level_evt_handler(void *handle, uint8_t *event_buf,
-				  uint32_t len)
-{
-	tp_wma_handle wma = (tp_wma_handle)handle;
-	struct wmi_host_ani_level_event *ani = NULL;
-	uint32_t num_freqs = 0;
-	QDF_STATUS status;
-	tpAniSirGlobal pmac;
-	int ret = 0;
-
-	pmac = (tpAniSirGlobal)cds_get_context(QDF_MODULE_ID_PE);
-	if (!pmac || !wma) {
-		WMA_LOGE(FL("Invalid pmac or wma"));
-		return -EINVAL;
-	}
-
-	status = wmi_unified_extract_ani_level(wma->wmi_handle, event_buf,
-					       &ani, &num_freqs);
-
-	if (QDF_IS_STATUS_ERROR(status)) {
-		WMA_LOGE("%s: Failed to extract ani level", __func__);
-		return -EINVAL;
-	}
-
-	if (!pmac->ani_params.ani_level_cb) {
-		WMA_LOGE(FL("Invalid ani_level_cb"));
-		ret = -EINVAL;
-		goto free;
-	}
-
-	pmac->ani_params.ani_level_cb(ani, num_freqs,
-				      pmac->ani_params.context);
-
-free:
-	qdf_mem_free(ani);
-	return ret;
-}
-#else
-int wma_get_ani_level_evt_handler(void *handle, uint8_t *event_buf,
-				  uint32_t len)
-{
-	return 0;
-}
-#endif
-

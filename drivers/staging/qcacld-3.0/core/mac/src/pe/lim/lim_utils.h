@@ -765,6 +765,7 @@ bool lim_check_disassoc_deauth_ack_pending(tpAniSirGlobal pMac,
 
 #ifdef WLAN_FEATURE_11W
 void lim_pmf_sa_query_timer_handler(void *pMacGlobal, uint32_t param);
+void lim_pmf_comeback_timer_callback(void *context);
 void lim_set_protected_bit(tpAniSirGlobal pMac,
 	tpPESession psessionEntry,
 	tSirMacAddr peer, tpSirMacMgmtHdr pMacHdr);
@@ -1319,7 +1320,9 @@ static inline QDF_STATUS lim_populate_he_mcs_set(tpAniSirGlobal mac_ctx,
  * lim_assoc_rej_add_to_rssi_based_reject_list() - Add BSSID to the rssi based
  * rejection list
  * @mac_ctx: mac ctx
- * @ap_info: ap's info which is to be rejected.
+ * @rssi_assoc_rej: rssi assoc reject attribute
+ * @bssid : BSSID of the AP
+ * @rssi : RSSI of the assoc resp
  *
  * Add BSSID to the rssi based rejection list. Also if number
  * of entries is greater than MAX_RSSI_AVOID_BSSID_LIST
@@ -1328,7 +1331,8 @@ static inline QDF_STATUS lim_populate_he_mcs_set(tpAniSirGlobal mac_ctx,
  * Return: void
  */
 void lim_assoc_rej_add_to_rssi_based_reject_list(tpAniSirGlobal mac_ctx,
-					struct sir_rssi_disallow_lst *ap_info);
+	tDot11fTLVrssi_assoc_rej *rssi_assoc_rej,
+	tSirMacAddr bssid, int8_t rssi);
 
 /**
  * lim_decrement_pending_mgmt_count: Decrement mgmt frame count
@@ -1471,20 +1475,5 @@ static inline void lim_set_peer_twt_cap(tpPESession session,
 {
 }
 #endif
-
-struct wlan_ies *
-hdd_get_self_disconnect_ies(tpAniSirGlobal mac_ctx, uint8_t vdev_id);
-
-void hdd_free_self_disconnect_ies(tpAniSirGlobal mac_ctx, uint8_t vdev_id);
-
-/**
- * lim_is_sha384_akm() - Function to check if the negotiated AKM for the
- * current session is based on sha384 key derivation function.
- * @mac_ctx: pointer to mac data
- * @akm: negotiated AKM for the current session
- *
- * Return: true if akm is sha384 based kdf or false
- */
-bool lim_is_sha384_akm(enum ani_akm_type akm);
 
 #endif /* __LIM_UTILS_H */

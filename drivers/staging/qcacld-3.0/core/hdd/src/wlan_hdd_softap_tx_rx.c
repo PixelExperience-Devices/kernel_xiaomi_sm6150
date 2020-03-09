@@ -662,16 +662,6 @@ netdev_tx_t hdd_softap_hard_start_xmit(struct sk_buff *skb,
 	return ret;
 }
 
-QDF_STATUS hdd_softap_ipa_start_xmit(qdf_nbuf_t nbuf, qdf_netdev_t dev)
-{
-	if (NETDEV_TX_OK == hdd_softap_hard_start_xmit(
-					(struct sk_buff *)nbuf,
-					(struct net_device *)dev))
-		return QDF_STATUS_SUCCESS;
-	else
-		return QDF_STATUS_E_FAILURE;
-}
-
 static void __hdd_softap_tx_timeout(struct net_device *dev)
 {
 	struct hdd_adapter *adapter = WLAN_HDD_GET_PRIV_PTR(dev);
@@ -812,32 +802,6 @@ QDF_STATUS hdd_softap_deinit_tx_rx_sta(struct hdd_adapter *adapter,
 }
 
 /**
- * hdd_softap_tsf_timestamp_rx() - time stamp Rx netbuf
- * @context: pointer to HDD context
- * @netbuf: pointer to a Rx netbuf
- *
- * Return: None
- */
-#ifdef WLAN_FEATURE_TSF_PLUS
-static inline void hdd_softap_tsf_timestamp_rx(struct hdd_context *hdd_ctx,
-					       qdf_nbuf_t netbuf)
-{
-	uint64_t target_time;
-
-	if (!hdd_tsf_is_rx_set(hdd_ctx))
-		return;
-
-	target_time = ktime_to_us(netbuf->tstamp);
-	hdd_rx_timestamp(netbuf, target_time);
-}
-#else
-static inline void hdd_softap_tsf_timestamp_rx(struct hdd_context *hdd_ctx,
-					       qdf_nbuf_t netbuf)
-{
-}
-#endif
-
-/**
  * hdd_softap_notify_tx_compl_cbk() - callback to notify tx completion
  * @skb: pointer to skb data
  * @adapter: pointer to vdev apdapter
@@ -966,16 +930,11 @@ QDF_STATUS hdd_softap_rx_packet_cbk(void *context, qdf_nbuf_t rx_buf)
 		 * it to stack
 		 */
 		qdf_net_buf_debug_release_skb(skb);
-
-		hdd_softap_tsf_timestamp_rx(hdd_ctx, skb);
-
-		if (qdf_likely(hdd_ctx->enable_rxthread)) {
-			local_bh_disable();
+		if (hdd_napi_enabled(HDD_NAPI_ANY) &&
+			!hdd_ctx->enable_rxthread)
 			rxstat = netif_receive_skb(skb);
-			local_bh_enable();
-		} else {
-			rxstat = netif_receive_skb(skb);
-		}
+		else
+			rxstat = netif_rx_ni(skb);
 
 		hdd_ctx->no_rx_offload_pkt_cnt++;
 
@@ -1007,7 +966,7 @@ QDF_STATUS hdd_softap_deregister_sta(struct hdd_adapter *adapter,
 
 	hdd_ctx = WLAN_HDD_GET_CTX(adapter);
 
-	if (sta_id >= WLAN_MAX_STA_COUNT) {
+	if (sta_id >= HDD_MAX_ADAPTERS) {
 		hdd_err("Error: Invalid sta_id: %u", sta_id);
 		return QDF_STATUS_E_INVAL;
 	}
@@ -1040,8 +999,6 @@ QDF_STATUS hdd_softap_deregister_sta(struct hdd_adapter *adapter,
 			     sizeof(struct hdd_station_info));
 		spin_unlock_bh(&adapter->sta_info_lock);
 	}
-
-	hdd_softap_deinit_tx_rx_sta(adapter, sta_id);
 
 	hdd_ctx->sta_to_adapter[sta_id] = NULL;
 	sme_config = qdf_mem_malloc(sizeof(*sme_config));
@@ -1076,7 +1033,7 @@ QDF_STATUS hdd_softap_register_sta(struct hdd_adapter *adapter,
 	hdd_info("STA:%u, Auth:%u, Priv:%u, WMM:%u",
 		 sta_id, auth_required, privacy_required, wmm_enabled);
 
-	if (sta_id >= WLAN_MAX_STA_COUNT) {
+	if (sta_id >= HDD_MAX_ADAPTERS) {
 		hdd_err("Error: Invalid sta_id: %u", sta_id);
 		return qdf_status;
 	}
@@ -1186,7 +1143,7 @@ QDF_STATUS hdd_softap_register_bc_sta(struct hdd_adapter *adapter,
 	ap_ctx = WLAN_HDD_GET_AP_CTX_PTR(adapter);
 	sta_id = ap_ctx->broadcast_sta_id;
 
-	if (sta_id >= WLAN_MAX_STA_COUNT) {
+	if (sta_id >= HDD_MAX_ADAPTERS) {
 		hdd_err("Error: Invalid sta_id: %u", sta_id);
 		return qdf_status;
 	}

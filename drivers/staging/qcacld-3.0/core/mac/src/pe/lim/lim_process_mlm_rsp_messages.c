@@ -433,6 +433,30 @@ static void lim_send_mlm_assoc_req(tpAniSirGlobal mac_ctx,
 		(uint32_t *) assoc_req);
 }
 
+#ifdef WLAN_FEATURE_11W
+/**
+ * lim_pmf_comeback_timer_callback() -PMF callback handler
+ * @context: Timer context
+ *
+ * This function is called to processes the PMF comeback
+ * callback
+ *
+ * Return: None
+ */
+void lim_pmf_comeback_timer_callback(void *context)
+{
+	tComebackTimerInfo *info = (tComebackTimerInfo *) context;
+	tpAniSirGlobal mac_ctx = info->pMac;
+	tpPESession psessionEntry = &mac_ctx->lim.gpSession[info->sessionID];
+
+	pe_err("comeback later timer expired. sending MLM ASSOC req");
+	/* set MLM state such that ASSOC REQ packet will be sent out */
+	psessionEntry->limPrevMlmState = info->limPrevMlmState;
+	psessionEntry->limMlmState = info->limMlmState;
+	lim_send_mlm_assoc_req(mac_ctx, psessionEntry);
+}
+#endif /* WLAN_FEATURE_11W */
+
 /**
  * lim_process_mlm_auth_cnf()-Process Auth confirmation
  * @mac_ctx:  Pointer to Global MAC structure
@@ -560,21 +584,6 @@ void lim_process_mlm_auth_cnf(tpAniSirGlobal mac_ctx, uint32_t *msg)
 			MTRACE(mac_trace(mac_ctx, TRACE_CODE_MLM_STATE,
 				session_entry->peSessionId,
 				session_entry->limMlmState));
-
-			/* WAR for some IOT issue on specific AP:
-			 * STA failed to connect to SAE AP due to incorrect
-			 * password is used. Then AP will still reject the
-			 * authentication even correct password is used unless
-			 * STA send deauth to AP upon authentication failure.
-			 */
-			if (auth_type == eSIR_AUTH_TYPE_SAE) {
-				pe_debug("Send deauth for SAE auth failure");
-				lim_send_deauth_mgmt_frame(mac_ctx,
-						       auth_cnf->protStatusCode,
-						       auth_cnf->peerMacAddr,
-						       session_entry, false);
-			}
-
 			/*
 			 * Need to send Join response with
 			 * auth failure to Host.

@@ -207,7 +207,6 @@
 #define WMA_ENABLE_UAPSD_REQ            SIR_HAL_ENABLE_UAPSD_REQ
 #define WMA_DISABLE_UAPSD_REQ           SIR_HAL_DISABLE_UAPSD_REQ
 
-#define WMA_ROAM_SYNC_TIMEOUT          SIR_HAL_WMA_ROAM_SYNC_TIMEOUT
 /* / PE <-> HAL statistics messages */
 #define WMA_GET_STATISTICS_REQ         SIR_HAL_GET_STATISTICS_REQ
 #define WMA_GET_STATISTICS_RSP         SIR_HAL_GET_STATISTICS_RSP
@@ -255,7 +254,6 @@
 #endif
 
 #define WMA_ROAM_SCAN_OFFLOAD_REQ   SIR_HAL_ROAM_SCAN_OFFLOAD_REQ
-#define WMA_ROAM_PRE_AUTH_STATUS    SIR_HAL_ROAM_PRE_AUTH_STATUS_IND
 
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
 #define WMA_ROAM_OFFLOAD_SYNCH_IND  SIR_HAL_ROAM_OFFLOAD_SYNCH_IND
@@ -359,8 +357,6 @@
 
 #define WMA_GET_PEER_INFO          SIR_HAL_GET_PEER_INFO
 #define WMA_GET_PEER_INFO_EXT      SIR_HAL_GET_PEER_INFO_EXT
-
-#define WMA_GET_ISOLATION          SIR_HAL_GET_ISOLATION
 
 #define WMA_MODEM_POWER_STATE_IND SIR_HAL_MODEM_POWER_STATE_IND
 
@@ -468,7 +464,6 @@
 #ifdef WLAN_MWS_INFO_DEBUGFS
 #define WMA_GET_MWS_COEX_INFO_REQ            SIR_HAL_GET_MWS_COEX_INFO_REQ
 #endif
-#define WMA_SET_ROAM_TRIGGERS                SIR_HAL_SET_ROAM_TRIGGERS
 
 /* Bit 6 will be used to control BD rate for Management frames */
 #define HAL_USE_BD_RATE2_FOR_MANAGEMENT_FRAME 0x40
@@ -624,7 +619,7 @@ typedef QDF_STATUS (*wma_tx_ota_comp_callback)(void *context, qdf_nbuf_t buf,
 typedef void (*wma_txFailIndCallback)(uint8_t *, uint8_t);
 
 /* generic callback for updating parameters from target to HDD */
-typedef int (*wma_tgt_cfg_cb)(hdd_handle_t handle, struct wma_tgt_cfg *cfg);
+typedef void (*wma_tgt_cfg_cb)(hdd_handle_t handle, struct wma_tgt_cfg *cfg);
 
 /**
  * struct wma_cli_set_cmd_t - set command parameters
@@ -761,28 +756,20 @@ QDF_STATUS wma_register_roaming_callbacks(
 			roam_offload_synch_ind *roam_synch_data,
 			tpSirBssDescription  bss_desc_ptr,
 			enum sir_roam_op_code reason),
-		QDF_STATUS (*csr_roam_auth_event_handle_cb)(tpAniSirGlobal mac,
-			uint8_t vdev_id, struct qdf_mac_addr bssid),
 		QDF_STATUS (*pe_roam_synch_cb)(tpAniSirGlobal mac,
 			roam_offload_synch_ind *roam_synch_data,
 			tpSirBssDescription  bss_desc_ptr,
-			enum sir_roam_op_code reason),
-		QDF_STATUS (*pe_disconnect_cb) (tpAniSirGlobal mac,
-						uint8_t vdev_id));
+			enum sir_roam_op_code reason));
 #else
 static inline QDF_STATUS wma_register_roaming_callbacks(
 		QDF_STATUS (*csr_roam_synch_cb)(tpAniSirGlobal mac,
 			roam_offload_synch_ind *roam_synch_data,
 			tpSirBssDescription  bss_desc_ptr,
 			enum sir_roam_op_code reason),
-		QDF_STATUS (*csr_roam_auth_event_handle_cb)(tpAniSirGlobal mac,
-			uint8_t vdev_id, struct qdf_mac_addr bssid),
 		QDF_STATUS (*pe_roam_synch_cb)(tpAniSirGlobal mac,
 			roam_offload_synch_ind *roam_synch_data,
 			tpSirBssDescription  bss_desc_ptr,
-			enum sir_roam_op_code reason),
-		QDF_STATUS (*pe_disconnect_cb) (tpAniSirGlobal mac,
-						uint8_t vdev_id))
+			enum sir_roam_op_code reason))
 {
 	return QDF_STATUS_E_NOSUPPORT;
 }

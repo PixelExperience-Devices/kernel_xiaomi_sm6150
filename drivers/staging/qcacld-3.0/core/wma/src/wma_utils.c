@@ -4631,105 +4631,7 @@ int wma_rcpi_event_handler(void *handle, uint8_t *cmd_param_info,
 	return 0;
 }
 
-/**
- * wma_set_roam_offload_flag() -  Set roam offload flag to fw
- * @wma:     wma handle
- * @vdev_id: vdev id
- * @is_set:  set or clear
- *
- * Return: none
- */
-static void wma_set_roam_offload_flag(tp_wma_handle wma, uint8_t vdev_id,
-				      bool is_set)
-{
-	QDF_STATUS status;
-	uint32_t flag = 0;
 
-	if (is_set)
-		flag = WMI_ROAM_FW_OFFLOAD_ENABLE_FLAG |
-		       WMI_ROAM_BMISS_FINAL_SCAN_ENABLE_FLAG;
-
-	WMA_LOGD("%s: vdev_id:%d, is_set:%d, flag:%d, roam_offload_enabled:%d",
-		 __func__, vdev_id, is_set, flag,
-		  wma->interfaces[vdev_id].roam_offload_enabled);
-
-	status = wma_vdev_set_param(wma->wmi_handle, vdev_id,
-				    WMI_VDEV_PARAM_ROAM_FW_OFFLOAD, flag);
-	if (QDF_IS_STATUS_ERROR(status))
-		WMA_LOGE("Failed to set WMI_VDEV_PARAM_ROAM_FW_OFFLOAD");
-	else
-		wma->interfaces[vdev_id].roam_offload_enabled = is_set;
-}
-
-/**
- * wma_update_roam_offload_flag() -  update roam offload flag to fw
- * @wma:     wma handle
- * @vdev_id: vdev id
- * @is_connected: connected or disconnected
- *
- * Return: none
- */
-static void wma_update_roam_offload_flag(tp_wma_handle wma, uint8_t vdev_id,
-					 bool is_connected)
-{
-	struct wma_txrx_node *iface;
-	uint8_t id;
-	uint8_t roam_offload_vdev_id = WMA_INVALID_VDEV_ID;
-	uint32_t list[MAX_NUMBER_OF_CONC_CONNECTIONS];
-	uint8_t count;
-
-	WMA_LOGD("%s: vdev_id:%d, is_connected:%d", __func__,
-		 vdev_id, is_connected);
-
-	iface = &wma->interfaces[vdev_id];
-
-	if ((iface->type != WMI_VDEV_TYPE_STA) ||
-	    (iface->sub_type != 0)) {
-		WMA_LOGE("%s: this isn't a STA: %d",
-			 __func__, vdev_id);
-		return;
-	}
-
-	if (iface->roaming_in_progress || iface->roam_synch_in_progress) {
-		WMA_LOGE("%s: roaming in progress: %d",
-			 __func__, vdev_id);
-		return;
-	}
-
-	for (id = 0; id < wma->max_bssid; id++) {
-		if (wma->interfaces[id].roam_offload_enabled)
-			roam_offload_vdev_id = id;
-	}
-
-	/*
-	 * If sta connected, and no connected sta interface exist, then set
-	 * set roam offload flag to this sta interface
-	 */
-	if (is_connected && (roam_offload_vdev_id == WMA_INVALID_VDEV_ID))
-		wma_set_roam_offload_flag(wma, vdev_id, true);
-
-	if (!is_connected && roam_offload_vdev_id == vdev_id) {
-		/* If sta disconnected and roam offload enaled on this
-		 * interface, then clear roam offload flag
-		 */
-		wma_set_roam_offload_flag(wma, vdev_id, false);
-
-		count = policy_mgr_mode_specific_connection_count(
-				wma->psoc, PM_STA_MODE, list);
-		WMA_LOGD("%s: valid sta count:%d", __func__, count);
-		/*
-		 * If there is multi sta connection before this disconnection,
-		 * then set roam offload flag to other connected sta inferface.
-		 */
-		if (count > 1) {
-			for (id = 0; id < count; id++) {
-				if (list[id] != vdev_id)
-					wma_set_roam_offload_flag(wma, list[id],
-								  true);
-			}
-		}
-	}
-}
 
 QDF_STATUS wma_send_vdev_up_to_fw(t_wma_handle *wma,
 				  struct vdev_up_params *params,
@@ -4743,11 +4645,6 @@ QDF_STATUS wma_send_vdev_up_to_fw(t_wma_handle *wma,
 			 params->vdev_id, bssid);
 		return QDF_STATUS_SUCCESS;
 	}
-
-	if (!wma_is_vdev_valid(params->vdev_id))
-		return QDF_STATUS_E_FAILURE;
-
-	wma_update_roam_offload_flag(wma, params->vdev_id, true);
 	status = wmi_unified_vdev_up_send(wma->wmi_handle, bssid, params);
 	wma_release_wakelock(&vdev->vdev_start_wakelock);
 
@@ -4759,7 +4656,6 @@ QDF_STATUS wma_send_vdev_down_to_fw(t_wma_handle *wma, uint8_t vdev_id)
 	QDF_STATUS status;
 	struct wma_txrx_node *vdev = &wma->interfaces[vdev_id];
 
-	wma_update_roam_offload_flag(wma, vdev_id, false);
 	wma->interfaces[vdev_id].roaming_in_progress = false;
 	status = wmi_unified_vdev_down_send(wma->wmi_handle, vdev_id);
 	wma_release_wakelock(&vdev->vdev_start_wakelock);
@@ -5080,50 +4976,3 @@ int wma_cold_boot_cal_event_handler(void *wma_ctx, uint8_t *event_buff,
 
 	return 0;
 }
-
-#ifdef FEATURE_OEM_DATA
-int wma_oem_event_handler(void *wma_ctx, uint8_t *event_buff, uint32_t len)
-{
-	WMI_OEM_DATA_EVENTID_param_tlvs *param_buf;
-	tpAniSirGlobal pmac =
-		(tpAniSirGlobal)cds_get_context(QDF_MODULE_ID_PE);
-	wmi_oem_data_event_fixed_param *event;
-	struct oem_data oem_event_data;
-
-	if (!pmac) {
-		wma_err("NULL mac handle");
-		return -EINVAL;
-	}
-
-	if (!pmac->sme.oem_data_event_handler_cb) {
-		wma_err("oem data handler cb is not registered");
-		return -EINVAL;
-	}
-
-	param_buf =
-		   (WMI_OEM_DATA_EVENTID_param_tlvs *)event_buff;
-	if (!param_buf) {
-		wma_err("Invalid oem data Event");
-		return -EINVAL;
-	}
-
-	event = param_buf->fixed_param;
-	if (!event) {
-		wma_err("Invalid fixed param in oem data Event");
-		return -EINVAL;
-	}
-
-	if (event->data_len > param_buf->num_data) {
-		wma_err("Invalid data len %d num_data %d", event->data_len,
-			param_buf->num_data);
-		return -EINVAL;
-	}
-
-	oem_event_data.data_len = event->data_len;
-	oem_event_data.data = param_buf->data;
-
-	pmac->sme.oem_data_event_handler_cb(&oem_event_data);
-
-	return QDF_STATUS_SUCCESS;
-}
-#endif

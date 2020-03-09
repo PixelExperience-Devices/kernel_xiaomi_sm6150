@@ -380,7 +380,7 @@ static void lim_handle_join_rsp_status(tpAniSirGlobal mac_ctx,
 			SIR_MAC_VENDOR_AP_1_OUI, SIR_MAC_VENDOR_AP_1_OUI_LEN,
 			bss_ies, bss_ie_len) != NULL);
 
-		if (mac_ctx->roam.configParam.is_force_1x1_enable &&
+		if (mac_ctx->roam.configParam.is_force_1x1 &&
 		    is_vendor_ap_1_present && (session_entry->nss == 2) &&
 		    (mac_ctx->lteCoexAntShare == 0 ||
 				IS_5G_CH(session_entry->currentOperChannel))) {
@@ -2178,7 +2178,7 @@ void lim_handle_csa_offload_msg(tpAniSirGlobal mac_ctx,
 
 	/* Send RSO Stop to FW before triggering the vdev restart for CSA */
 	if (mac_ctx->lim.stop_roaming_callback)
-		mac_ctx->lim.stop_roaming_callback(mac_ctx,
+		mac_ctx->lim.stop_roaming_callback(MAC_HANDLE(mac_ctx),
 						   session_entry->smeSessionId,
 						   ecsr_driver_disabled);
 

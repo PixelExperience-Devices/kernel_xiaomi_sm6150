@@ -46,7 +46,7 @@ typedef struct sCsrNeighborRoamCfgParams {
 	uint8_t maxNeighborRetries;
 	uint32_t neighborScanPeriod;
 	uint32_t neighbor_scan_min_period;
-	tCsrChannelInfo specific_chan_info;
+	tCsrChannelInfo channelInfo;
 	uint8_t neighborLookupThreshold;
 	int8_t rssi_thresh_offset_5g;
 	uint8_t neighborReassocThreshold;
@@ -64,12 +64,6 @@ typedef struct sCsrNeighborRoamCfgParams {
 	uint32_t hi_rssi_scan_rssi_delta;
 	uint32_t hi_rssi_scan_delay;
 	int32_t hi_rssi_scan_rssi_ub;
-	tCsrChannelInfo pref_chan_info;
-	uint32_t full_roam_scan_period;
-	bool enable_scoring_for_roam;
-	uint8_t roam_rssi_diff;
-	uint16_t roam_scan_home_away_time;
-	uint8_t roam_scan_n_probes;
 } tCsrNeighborRoamCfgParams, *tpCsrNeighborRoamCfgParams;
 
 #define CSR_NEIGHBOR_ROAM_INVALID_CHANNEL_INDEX    255
@@ -135,15 +129,7 @@ typedef enum {
 	SPLIT_SCAN_OCCUPIED_LIST = 1,
 } eNeighborRoamScanMode;
 
-/**
- * struct sCsr11rAssocNeighborInfo - Control info for neighbor roam algorithm
- * @roam_control_enable: Flag used to cache the status of roam control
- *			 configuration. This will be set only if the
- *			 corresponding vendor command data is configured to
- *			 driver/firmware successfully. The same shall be
- *			 returned to userspace whenever queried for roam
- *			 control config status.
- */
+/* Complete control information for neighbor roam algorithm */
 typedef struct sCsrNeighborRoamControlInfo {
 	eCsrNeighborRoamState neighborRoamState;
 	eCsrNeighborRoamState prevNeighborRoamState;
@@ -178,7 +164,6 @@ typedef struct sCsrNeighborRoamControlInfo {
 	uint8_t currentRoamBeaconRssiWeight;
 	uint8_t last_sent_cmd;
 	bool b_roam_scan_offload_started;
-	bool roam_control_enable;
 } tCsrNeighborRoamControlInfo, *tpCsrNeighborRoamControlInfo;
 
 /* All the necessary Function declarations are here */
@@ -340,9 +325,6 @@ void csr_roam_reset_roam_params(tpAniSirGlobal mac_ptr);
 #define REASON_FILS_PARAMS_CHANGED                  41
 #define REASON_SME_ISSUED                           42
 #define REASON_DRIVER_ENABLED                       43
-#define REASON_ROAM_FULL_SCAN_PERIOD_CHANGED        44
-#define REASON_SCORING_CRITERIA_CHANGED             45
-#define REASON_ROAM_CONTROL_CONFIG_RESTORED         46
 
 #if defined(WLAN_FEATURE_HOST_ROAM) || defined(WLAN_FEATURE_ROAM_OFFLOAD)
 QDF_STATUS csr_roam_offload_scan(tpAniSirGlobal pMac, uint8_t sessionId,
@@ -402,52 +384,10 @@ QDF_STATUS csr_roam_read_tsf(tpAniSirGlobal pMac, uint8_t *pTimestamp,
 QDF_STATUS csr_roam_synch_callback(tpAniSirGlobal mac,
 	roam_offload_synch_ind *roam_synch_data,
 	tpSirBssDescription  bss_desc_ptr, enum sir_roam_op_code reason);
-
-/**
- * csr_roam_auth_offload_callback() - Registered CSR Callback function to handle
- * WPA3 roam pre-auth event from firmware.
- * @mac_ctx: Global mac context pointer
- * @vdev_id: Vdev id
- * @bssid: candidate AP bssid
- */
-QDF_STATUS
-csr_roam_auth_offload_callback(tpAniSirGlobal mac_ctx, uint8_t vdev_id,
-			       struct qdf_mac_addr bssid);
-
-/**
- * csr_process_roam_auth_offload_callback() - API to trigger the
- * WPA3 pre-auth event for candidate AP received from firmware.
- * @vdev_id: vdev id
- * @roam_bssid: Candidate BSSID to roam
- *
- * This function calls the hdd_sme_roam_callback with reason
- * eCSR_ROAM_SAE_COMPUTE to trigger SAE auth to supplicant.
- */
-QDF_STATUS
-csr_process_roam_auth_offload_callback(tpAniSirGlobal mac_ctx,
-				       uint8_t vdev_id,
-				       struct qdf_mac_addr roam_bssid);
-
 #else
 static inline QDF_STATUS csr_roam_synch_callback(tpAniSirGlobal mac,
 	roam_offload_synch_ind *roam_synch_data,
 	tpSirBssDescription  bss_desc_ptr, enum sir_roam_op_code reason)
-{
-	return QDF_STATUS_E_NOSUPPORT;
-}
-
-static inline QDF_STATUS
-csr_roam_auth_offload_callback(tpAniSirGlobal mac_ctx,
-			       uint8_t vdev_id,
-			       struct qdf_mac_addr bssid)
-{
-	return QDF_STATUS_E_NOSUPPORT;
-}
-
-static inline QDF_STATUS
-csr_process_roam_auth_offload_callback(tpAniSirGlobal mac_ctx,
-				       uint8_t vdev_id,
-				       struct qdf_mac_addr roam_bssid)
 {
 	return QDF_STATUS_E_NOSUPPORT;
 }

@@ -47,7 +47,6 @@
 #include <wlan_cfg80211_scan.h>
 
 #include "wlan_utility.h"
-#include "wlan_hdd_object_manager.h"
 
 #define MAX_RATES                       12
 #define HDD_WAKE_LOCK_SCAN_DURATION (5 * 1000) /* in msec */
@@ -479,7 +478,6 @@ static int __wlan_hdd_cfg80211_scan(struct wiphy *wiphy,
 	enum scan_reject_states curr_reason;
 	static uint32_t scan_ebusy_cnt;
 	struct scan_params params = {0};
-	struct wlan_objmgr_vdev *vdev;
 
 	hdd_enter();
 
@@ -676,20 +674,12 @@ static int __wlan_hdd_cfg80211_scan(struct wiphy *wiphy,
 			scan_info->scan_add_ie.length;
 	}
 
-	vdev = hdd_objmgr_get_vdev(adapter);
-	if (!vdev) {
-		status = -EINVAL;
-		goto error;
-	}
-
 	if ((request->n_ssids == 1) && (request->ssids != NULL) &&
 	    (request->ssids[0].ssid_len > 7) &&
 	     !qdf_mem_cmp(&request->ssids[0], "DIRECT-", 7))
-		ucfg_p2p_status_scan(vdev);
+		ucfg_p2p_status_scan(adapter->vdev);
 
-	status = wlan_cfg80211_scan(vdev, request, &params);
-	hdd_objmgr_put_vdev(vdev);
-error:
+	status = wlan_cfg80211_scan(hdd_ctx->pdev, request, &params);
 	if (params.default_ie.ptr)
 		qdf_mem_free(params.default_ie.ptr);
 	hdd_exit();
@@ -983,16 +973,8 @@ static int __wlan_hdd_cfg80211_vendor_scan(struct wiphy *wiphy,
 	hdd_enter_dev(wdev->netdev);
 
 	ret = wlan_hdd_validate_context(hdd_ctx);
-	if (ret) {
-		/*
-		 * During SSR, if -EBUSY is returned then OBSS vendor scan is
-		 * not issued immediately.
-		 */
-		if (ret == -EAGAIN)
-			return -EBUSY;
-
+	if (0 != ret)
 		return ret;
-	}
 
 	if (wlan_cfg80211_nla_parse(tb, QCA_WLAN_VENDOR_ATTR_SCAN_MAX,
 				    data, data_len, scan_policy)) {
@@ -1293,17 +1275,12 @@ static int __wlan_hdd_cfg80211_sched_scan_start(struct wiphy *wiphy,
 {
 	struct hdd_adapter *adapter = WLAN_HDD_GET_PRIV_PTR(dev);
 	struct hdd_context *hdd_ctx;
-	struct wlan_objmgr_vdev *vdev;
 	int ret;
-	enum QDF_GLOBAL_MODE curr_mode;
 
 	hdd_enter();
 
-	curr_mode = hdd_get_conparam();
-
-	if (QDF_GLOBAL_FTM_MODE == curr_mode ||
-	    QDF_GLOBAL_MONITOR_MODE == curr_mode) {
-		hdd_err_rl("Command not allowed in FTM/Monitor mode");
+	if (QDF_GLOBAL_FTM_MODE == hdd_get_conparam()) {
+		hdd_err("Command not allowed in FTM mode");
 		return -EINVAL;
 	}
 
@@ -1333,14 +1310,8 @@ static int __wlan_hdd_cfg80211_sched_scan_start(struct wiphy *wiphy,
 		return -EBUSY;
 	}
 
-	vdev = hdd_objmgr_get_vdev(adapter);
-	if (!vdev)
-		return -EINVAL;
-	ret = wlan_cfg80211_sched_scan_start(vdev, request,
+	return wlan_cfg80211_sched_scan_start(hdd_ctx->pdev, dev, request,
 				      hdd_ctx->config->scan_backoff_multiplier);
-	hdd_objmgr_put_vdev(vdev);
-
-	return ret;
 }
 
 /**
@@ -1369,8 +1340,6 @@ int wlan_hdd_sched_scan_stop(struct net_device *dev)
 {
 	struct hdd_adapter *adapter = WLAN_HDD_GET_PRIV_PTR(dev);
 	struct hdd_context *hdd_ctx;
-	struct wlan_objmgr_vdev *vdev;
-	int ret;
 
 	if (QDF_GLOBAL_FTM_MODE == hdd_get_conparam()) {
 		hdd_err("Command not allowed in FTM mode");
@@ -1390,13 +1359,7 @@ int wlan_hdd_sched_scan_stop(struct net_device *dev)
 		return -EINVAL;
 	}
 
-	vdev = hdd_objmgr_get_vdev(adapter);
-	if (!vdev)
-		return -EINVAL;
-	ret = wlan_cfg80211_sched_scan_stop(vdev);
-	hdd_objmgr_put_vdev(vdev);
-
-	return ret;
+	return wlan_cfg80211_sched_scan_stop(hdd_ctx->pdev, dev);
 }
 
 /**
@@ -1414,15 +1377,11 @@ static int __wlan_hdd_cfg80211_sched_scan_stop(struct net_device *dev)
 {
 	struct hdd_adapter *adapter = WLAN_HDD_GET_PRIV_PTR(dev);
 	int errno;
-	enum QDF_GLOBAL_MODE curr_mode;
 
 	hdd_enter();
 
-	curr_mode = hdd_get_conparam();
-
-	if (QDF_GLOBAL_FTM_MODE == curr_mode ||
-	    QDF_GLOBAL_MONITOR_MODE == curr_mode) {
-		hdd_err_rl("Command not allowed in FTM/Monitor mode");
+	if (QDF_GLOBAL_FTM_MODE == hdd_get_conparam()) {
+		hdd_err_rl("Command not allowed in FTM mode");
 		return -EINVAL;
 	}
 

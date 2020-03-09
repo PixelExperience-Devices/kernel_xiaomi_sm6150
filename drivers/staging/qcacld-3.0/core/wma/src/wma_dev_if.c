@@ -674,7 +674,15 @@ out:
 	return status;
 }
 
-void wma_force_objmgr_vdev_peer_cleanup(tp_wma_handle wma, uint8_t vdev_id)
+/**
+ * wma_force_objmgr_vdev_peer_cleanup() - Cleanup ObjMgr Vdev peers during SSR
+ * @wma_handle: WMA handle
+ * @vdev_id: vdev ID
+ *
+ * Return: none
+ */
+static void wma_force_objmgr_vdev_peer_cleanup(tp_wma_handle wma,
+					       uint8_t vdev_id)
 {
 	struct wma_txrx_node *iface = &wma->interfaces[vdev_id];
 	struct wlan_objmgr_vdev *vdev;
@@ -694,12 +702,10 @@ void wma_force_objmgr_vdev_peer_cleanup(tp_wma_handle wma, uint8_t vdev_id)
 		return;
 	}
 
-	qdf_spin_lock_bh(&iface->peer_lock);
 	peer_list = &vdev->vdev_objmgr.wlan_peer_list;
 	if (!peer_list) {
 		WMA_LOGE("%s: peer_list is NULL", __func__);
 		wlan_objmgr_vdev_release_ref(vdev, WLAN_LEGACY_WMA_ID);
-		qdf_spin_unlock_bh(&iface->peer_lock);
 		return;
 	}
 
@@ -719,7 +725,7 @@ void wma_force_objmgr_vdev_peer_cleanup(tp_wma_handle wma, uint8_t vdev_id)
 		wlan_objmgr_peer_release_ref(peer, WLAN_LEGACY_WMA_ID);
 		peer = peer_next;
 	}
-	qdf_spin_unlock_bh(&iface->peer_lock);
+
 	wlan_objmgr_vdev_release_ref(vdev, WLAN_LEGACY_WMA_ID);
 
 	/* Force delete all the peers, set the wma interface peer_count to 0 */
@@ -756,7 +762,6 @@ static void wma_remove_objmgr_peer(tp_wma_handle wma, uint8_t vdev_id,
 	struct wlan_objmgr_peer *obj_peer;
 	struct wlan_objmgr_vdev *obj_vdev;
 	struct wlan_objmgr_pdev *obj_pdev;
-	struct wma_txrx_node *iface = &wma->interfaces[vdev_id];
 	uint8_t pdev_id = 0;
 
 	psoc = wma->psoc;
@@ -773,8 +778,6 @@ static void wma_remove_objmgr_peer(tp_wma_handle wma, uint8_t vdev_id,
 	}
 	obj_pdev = wlan_vdev_get_pdev(obj_vdev);
 	pdev_id = wlan_objmgr_pdev_get_pdev_id(obj_pdev);
-
-	qdf_spin_lock_bh(&iface->peer_lock);
 	obj_peer = wlan_objmgr_get_peer(psoc, pdev_id, peer_addr,
 					WLAN_LEGACY_WMA_ID);
 	if (obj_peer) {
@@ -785,7 +788,6 @@ static void wma_remove_objmgr_peer(tp_wma_handle wma, uint8_t vdev_id,
 	} else {
 		WMA_LOGE("Peer %pM not found", peer_addr);
 	}
-	qdf_spin_unlock_bh(&iface->peer_lock);
 
 	wlan_objmgr_vdev_release_ref(obj_vdev, WLAN_LEGACY_WMA_ID);
 }
@@ -1198,30 +1200,30 @@ int wma_vdev_start_resp_handler(void *handle, uint8_t *cmd_param_info,
 				false;
 		}
 
-		if (QDF_IS_STATUS_SUCCESS(resp_event->status) &&
-		    wma_is_vdev_valid(resp_event->vdev_id) &&
-		    (iface->type == WMI_VDEV_TYPE_MONITOR ||
-		    (iface->type == WMI_VDEV_TYPE_STA &&
-		    resp_event->resp_type == WMI_VDEV_RESTART_RESP_EVENT))) {
-			/* FW expects chanmode before chanwidth*/
+		if ((QDF_IS_STATUS_SUCCESS(resp_event->status) &&
+		     (resp_event->resp_type == WMI_VDEV_RESTART_RESP_EVENT) &&
+		     ((iface->type == WMI_VDEV_TYPE_STA) ||
+		      (iface->type == WMI_VDEV_TYPE_MONITOR))) ||
+		    ((resp_event->resp_type == WMI_VDEV_START_RESP_EVENT) &&
+		     (iface->type == WMI_VDEV_TYPE_MONITOR))) {
+			/* for CSA case firmware expects phymode before ch_wd */
 			err = wma_set_peer_param(wma, iface->bssid,
-						 WMI_PEER_PHYMODE,
-						 iface->chanmode,
-						 resp_event->vdev_id);
+					WMI_PEER_PHYMODE, iface->chanmode,
+					resp_event->vdev_id);
 			WMA_LOGD("%s:vdev_id %d chanmode %d status %d",
 				__func__, resp_event->vdev_id,
 				iface->chanmode, err);
 
 			chanwidth =
-				wmi_get_ch_width_from_phy_mode(
-						wma->wmi_handle,
-						iface->chanmode);
+				wmi_get_ch_width_from_phy_mode(wma->wmi_handle,
+							       iface->chanmode);
 			err = wma_set_peer_param(wma, iface->bssid,
 					WMI_PEER_CHWIDTH, chanwidth,
 					resp_event->vdev_id);
 			WMA_LOGD("%s:vdev_id %d chanwidth %d status %d",
 				__func__, resp_event->vdev_id,
 				chanwidth, err);
+
 			param.vdev_id = resp_event->vdev_id;
 			param.assoc_id = iface->aid;
 			status = wma_send_vdev_up_to_fw(wma, &param,
@@ -1230,19 +1232,18 @@ int wma_vdev_start_resp_handler(void *handle, uint8_t *cmd_param_info,
 				WMA_LOGE("%s:vdev_up failed vdev_id %d",
 					 __func__, resp_event->vdev_id);
 				wma_vdev_set_mlme_state(wma,
-					resp_event->vdev_id,
-					WLAN_VDEV_S_STOP);
+					resp_event->vdev_id, WLAN_VDEV_S_STOP);
 				policy_mgr_set_do_hw_mode_change_flag(
 					wma->psoc, false);
 			} else {
 				wma_vdev_set_mlme_state(wma,
-					resp_event->vdev_id,
-					WLAN_VDEV_S_RUN);
+					resp_event->vdev_id, WLAN_VDEV_S_RUN);
 				if (iface->beacon_filter_enabled)
 					wma_add_beacon_filter(wma,
-						&iface->beacon_filter);
+							&iface->beacon_filter);
 			}
 		}
+
 		wma_send_msg_high_priority(wma, WMA_SWITCH_CHANNEL_RSP,
 					   (void *)params, 0);
 	} else if (req_msg->msg_type == WMA_ADD_BSS_REQ) {
@@ -1861,21 +1862,17 @@ QDF_STATUS wma_create_peer(tp_wma_handle wma, struct cdp_pdev *pdev,
 	/* for each remote ibss peer, clear its keys */
 	if (wma_is_vdev_in_ibss_mode(wma, vdev_id) &&
 	    qdf_mem_cmp(peer_addr, mac_addr_raw, IEEE80211_ADDR_LEN)) {
-		tpSetStaKeyParams key_info;
+		tSetStaKeyParams key_info;
 
-		key_info = qdf_mem_malloc(sizeof(*key_info));
-		if (!key_info) {
-			return QDF_STATUS_E_NOMEM;
-		}
 		WMA_LOGD("%s: remote ibss peer %pM key clearing\n", __func__,
 			 peer_addr);
-		qdf_mem_zero(key_info, sizeof(*key_info));
-		key_info->smesessionId = vdev_id;
-		qdf_mem_copy(key_info->peer_macaddr.bytes, peer_addr,
-			     IEEE80211_ADDR_LEN);
-		key_info->sendRsp = false;
+		qdf_mem_zero(&key_info, sizeof(key_info));
+		key_info.smesessionId = vdev_id;
+		qdf_mem_copy(key_info.peer_macaddr.bytes, peer_addr,
+				IEEE80211_ADDR_LEN);
+		key_info.sendRsp = false;
 
-		wma_set_stakey(wma, key_info);
+		wma_set_stakey(wma, &key_info);
 	}
 
 	return QDF_STATUS_SUCCESS;
@@ -2273,12 +2270,11 @@ int wma_vdev_stop_resp_handler(void *handle, uint8_t *cmd_param_info,
 
 		status = wma_remove_bss_peer(wma, pdev, resp_event->vdev_id,
 					     params);
-		if (status) {
-			WMA_LOGE("%s Del bss failed  call vdev down vdev:%d",
-				 __func__, resp_event->vdev_id);
-			wma_send_del_bss_response(wma, req_msg,
-						  resp_event->vdev_id);
-			 goto free_req_msg;
+		if (status != 0) {
+			WMA_LOGE("%s Del bss failed vdev:%d", __func__,
+				 resp_event->vdev_id);
+			wma_cleanup_target_req_param(req_msg);
+			goto free_req_msg;
 		}
 
 		if (wmi_service_enabled(wma->wmi_handle,
@@ -2650,6 +2646,15 @@ struct cdp_vdev *wma_vdev_attach(tp_wma_handle wma_handle,
 	/* Initialize roaming offload state */
 	if ((self_sta_req->type == WMI_VDEV_TYPE_STA) &&
 	    (self_sta_req->sub_type == 0)) {
+		wma_handle->roam_offload_enabled = true;
+		ret = wma_vdev_set_param(wma_handle->wmi_handle,
+					self_sta_req->session_id,
+					WMI_VDEV_PARAM_ROAM_FW_OFFLOAD,
+					(WMI_ROAM_FW_OFFLOAD_ENABLE_FLAG |
+					WMI_ROAM_BMISS_FINAL_SCAN_ENABLE_FLAG));
+		if (QDF_IS_STATUS_ERROR(ret))
+			WMA_LOGE("Failed to set WMI_VDEV_PARAM_ROAM_FW_OFFLOAD");
+
 		/* Pass down enable/disable bcast probe rsp to FW */
 		ret = wma_vdev_set_param(
 				wma_handle->wmi_handle,
@@ -2985,20 +2990,23 @@ QDF_STATUS wma_vdev_start(tp_wma_handle wma,
 
 	/* TODO: Handle regulatory class, max antenna */
 	if (!isRestart) {
+		params.beacon_intval = req->beacon_intval;
+		params.dtim_period = req->dtim_period;
+
+		/* Copy the SSID */
+		if (req->ssid.length) {
+			params.ssid.length = req->ssid.length;
+			if (req->ssid.length < sizeof(cmd->ssid.ssid))
+				temp_ssid_len = req->ssid.length;
+			else
+				temp_ssid_len = sizeof(cmd->ssid.ssid);
+			qdf_mem_copy(params.ssid.mac_ssid, req->ssid.ssId,
+				     temp_ssid_len);
+		}
+
 		params.pmf_enabled = req->pmf_enabled;
 		if (req->pmf_enabled)
 			temp_flags |= WMI_UNIFIED_VDEV_START_PMF_ENABLED;
-	}
-
-	/* Copy the SSID */
-	if (req->ssid.length) {
-		params.ssid.length = req->ssid.length;
-		if (req->ssid.length < sizeof(cmd->ssid.ssid))
-			temp_ssid_len = req->ssid.length;
-		else
-			temp_ssid_len = sizeof(cmd->ssid.ssid);
-		qdf_mem_copy(params.ssid.mac_ssid, req->ssid.ssId,
-			     temp_ssid_len);
 	}
 
 	params.hidden_ssid = req->hidden_ssid;
@@ -3427,12 +3435,11 @@ void wma_hold_req_timer(void *data)
 
 		params->status = QDF_STATUS_E_TIMEOUT;
 		WMA_LOGE(FL("wma delete peer for del bss req timed out"));
-
 		if (wma_crash_on_fw_timeout(wma->fw_timeout_crash))
 			wma_trigger_recovery_assert_on_fw_timeout(
 				WMA_DELETE_STA_REQ);
-
-		wma_send_del_bss_response(wma, tgt_req, tgt_req->vdev_id);
+		wma_send_msg_high_priority(wma, WMA_DELETE_BSS_RSP,
+					   params, 0);
 	} else if ((tgt_req->msg_type == SIR_HAL_PDEV_SET_HW_MODE) &&
 			(tgt_req->type == WMA_PDEV_SET_HW_MODE_RESP)) {
 		struct sir_set_hw_mode_resp *params =
@@ -3652,17 +3659,19 @@ void wma_vdev_resp_timer(void *data)
 		 * Trigger host crash if the flag is set or if the timeout
 		 * is not due to fw down
 		 */
-		if (wma_crash_on_fw_timeout(wma->fw_timeout_crash))
+		if (wma_crash_on_fw_timeout(wma->fw_timeout_crash) == true) {
 			wma_trigger_recovery_assert_on_fw_timeout(
 				WMA_DELETE_BSS_REQ);
+			wma_cleanup_target_req_param(tgt_req);
+			goto free_tgt_req;
+		}
 
 		status = wma_remove_bss_peer(wma, pdev, tgt_req->vdev_id,
 					     params);
-		if (status) {
-			WMA_LOGE("Del BSS failed call del bss response vdev_id:%d",
-				 tgt_req->vdev_id);
-			wma_send_del_bss_response(wma, tgt_req,
-						  tgt_req->vdev_id);
+		if (status != 0) {
+			WMA_LOGE("Del BSS failed vdev_id:%d", tgt_req->vdev_id);
+			wma_cleanup_target_req_param(tgt_req);
+			goto free_tgt_req;
 		}
 
 		if (wmi_service_enabled(wma->wmi_handle,
@@ -3960,45 +3969,9 @@ static void wma_set_mgmt_frame_protection(tp_wma_handle wma)
 		WMA_LOGD("%s: QOS MFP/PMF set", __func__);
 	}
 }
-
-/**
- * wma_set_peer_pmf_status() - Get the peer and update PMF capability of it
- * @wma: wma handle
- * @peer_mac: peer mac addr
- * @is_pmf_enabled: Carries the status whether PMF is enabled or not
- *
- * Return: QDF_STATUS
- */
-static QDF_STATUS
-wma_set_peer_pmf_status(tp_wma_handle wma, uint8_t *peer_mac,
-			bool is_pmf_enabled)
-{
-	struct wlan_objmgr_peer *peer;
-
-	peer = wlan_objmgr_get_peer(wma->psoc,
-				    wlan_objmgr_pdev_get_pdev_id(wma->pdev),
-				    peer_mac, WLAN_LEGACY_WMA_ID);
-	if (!peer) {
-		WMA_LOGE("Peer of peer_mac %pM not found",
-			 peer_mac);
-		return QDF_STATUS_E_INVAL;
-	}
-	mlme_set_peer_pmf_status(peer, is_pmf_enabled);
-	wlan_objmgr_peer_release_ref(peer, WLAN_LEGACY_WMA_ID);
-	WMA_LOGD("set is_pmf_enabled %d for %pM", is_pmf_enabled, peer_mac);
-
-	return QDF_STATUS_SUCCESS;
-}
 #else
 static inline void wma_set_mgmt_frame_protection(tp_wma_handle wma)
 {
-}
-
-static QDF_STATUS
-wma_set_peer_pmf_status(tp_wma_handle wma, uint8_t *peer_mac,
-			bool is_pmf_enabled)
-{
-	return QDF_STATUS_SUCCESS;
 }
 #endif /* WLAN_FEATURE_11W */
 
@@ -4021,7 +3994,6 @@ static void wma_add_bss_ap_mode(tp_wma_handle wma, tpAddBssParams add_bss)
 	int8_t maxTxPower;
 	struct policy_mgr_hw_mode_params hw_mode = {0};
 	void *soc = cds_get_context(QDF_MODULE_ID_SOC);
-	struct wma_txrx_node *iface;
 
 	pdev = cds_get_context(QDF_MODULE_ID_TXRX);
 
@@ -4064,8 +4036,6 @@ static void wma_add_bss_ap_mode(tp_wma_handle wma, tpAddBssParams add_bss)
 		goto peer_cleanup;
 	}
 
-	iface = &wma->interfaces[vdev_id];
-
 	add_bss->staContext.staIdx = cdp_peer_get_local_peer_id(soc, peer);
 
 	qdf_mem_zero(&req, sizeof(req));
@@ -4086,7 +4056,7 @@ static void wma_add_bss_ap_mode(tp_wma_handle wma, tpAddBssParams add_bss)
 
 	req.max_txpow = add_bss->maxTxPower;
 	maxTxPower = add_bss->maxTxPower;
-	iface->rmfEnabled = add_bss->rmfEnabled;
+
 	if (add_bss->rmfEnabled)
 		wma_set_mgmt_frame_protection(wma);
 
@@ -4366,8 +4336,6 @@ static void wma_add_bss_sta_mode(tp_wma_handle wma, tpAddBssParams add_bss)
 		iface->llbCoexist = add_bss->llbCoexist;
 		iface->shortSlotTimeSupported = add_bss->shortSlotTimeSupported;
 		iface->nwType = add_bss->nwType;
-		if (add_bss->rmfEnabled)
-			wma_set_peer_pmf_status(wma, add_bss->bssId, true);
 		if (add_bss->nonRoamReassoc) {
 			peer = cdp_peer_find_by_addr(soc,
 					pdev, add_bss->bssId,
@@ -4827,8 +4795,10 @@ static void wma_add_sta_req_ap_mode(tp_wma_handle wma, tpAddStaParams add_sta)
 		}
 	}
 #endif
+
+	iface->rmfEnabled = add_sta->rmfEnabled;
 	if (add_sta->rmfEnabled)
-		wma_set_peer_pmf_status(wma, add_sta->staMac, true);
+		wma_set_mgmt_frame_protection(wma);
 
 	if (add_sta->uAPSD) {
 		status = wma_set_ap_peer_uapsd(wma, add_sta->smesessionId,
@@ -5442,7 +5412,6 @@ static void wma_del_tdls_sta(tp_wma_handle wma, tpDeleteStaParams del_sta)
 	if (wma_is_roam_synch_in_progress(wma, del_sta->smesessionId)) {
 		WMA_LOGE("%s: roaming in progress, reject del sta!", __func__);
 		del_sta->status = QDF_STATUS_E_PERM;
-		qdf_mem_free(peerStateParams);
 		goto send_del_rsp;
 	}
 
@@ -5845,7 +5814,6 @@ static void wma_wait_tx_complete(tp_wma_handle wma,
 		max_wait_iterations--;
 	}
 }
-
 /**
  * wma_delete_bss() - process delete bss request from upper layer
  * @wma: wma handle
