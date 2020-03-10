@@ -775,18 +775,7 @@ static struct i2c_driver tas2563_i2c_driver = {
 	.id_table = tas2563_i2c_id,
 };
 
-static int __init tas2536_init(void)
-{
-	return i2c_add_driver(&tas2563_i2c_driver);
-}
-
-static void __exit tas2536_exit(void)
-{
-	i2c_del_driver(&tas2563_i2c_driver);
-	return;
-}
-late_initcall(tas2536_init);
-module_exit(tas2536_exit);
+module_i2c_driver(tas2563_i2c_driver);
 
 MODULE_AUTHOR("Texas Instruments Inc.");
 MODULE_DESCRIPTION("TAS2563 I2C Smart Amplifier driver");
