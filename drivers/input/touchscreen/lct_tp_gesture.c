@@ -99,7 +99,7 @@ static int lct_creat_proc_tp_entry(void)
 {
     struct proc_dir_entry *proc_entry_tp;
 
-    proc_entry_tp = proc_create_data("tp_gesture", 0444, NULL, &lct_proc_tp_gesture_fops, NULL);
+    proc_entry_tp = proc_create_data("tp_gesture", 0660, NULL, &lct_proc_tp_gesture_fops, NULL);
     if (IS_ERR_OR_NULL(proc_entry_tp)) {
         TP_LOGE("add /proc/tp_gesture error!\n");
 		return -1;
