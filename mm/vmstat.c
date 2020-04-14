@@ -1091,7 +1091,7 @@ const char * const vmstat_text[] = {
 	"nr_vmscan_immediate_reclaim",
 	"nr_dirtied",
 	"nr_written",
-	"nr_indirectly_reclaimable",
+	"", /* nr_indirectly_reclaimable */
 	"nr_ion_heap",
 	"nr_ion_heap_pool",
 	/* enum writeback_stat_item counters */
@@ -1677,6 +1677,10 @@ static int vmstat_show(struct seq_file *m, void *arg)
 {
 	unsigned long *l = arg;
 	unsigned long off = l - (unsigned long *)m->private;
+
+	/* Skip hidden vmstat items. */
+	if (*vmstat_text[off] == '\0')
+		return 0;
 
 	seq_puts(m, vmstat_text[off]);
 	seq_put_decimal_ull(m, " ", *l);
